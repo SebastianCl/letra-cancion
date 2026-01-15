@@ -222,6 +222,7 @@ class LyricsOverlay(QWidget):
     closed = pyqtSignal()
     move_requested = pyqtSignal()
     sync_time_changed = pyqtSignal(int)  # Tiempo en milisegundos
+    quit_requested = pyqtSignal()  # Solicitud de cerrar la aplicación
     
     def __init__(self, config: Optional[OverlayConfig] = None):
         super().__init__()
@@ -289,10 +290,37 @@ class LyricsOverlay(QWidget):
         """)
         
         container_layout = QVBoxLayout(self.container)
-        container_layout.setContentsMargins(20, 15, 20, 15)
+        container_layout.setContentsMargins(20, 5, 5, 15)  # Menos margen arriba y derecha para el botón
         container_layout.setSpacing(8)
         
-        # Header con info
+        # Botón de cerrar en esquina superior derecha
+        close_btn_layout = QHBoxLayout()
+        close_btn_layout.setContentsMargins(0, 0, 0, 0)
+        close_btn_layout.addStretch()  # Empuja el botón a la derecha
+        
+        self.close_btn = QPushButton("✕")
+        self.close_btn.setFixedSize(24, 24)
+        self.close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.close_btn.setStyleSheet("""
+            QPushButton {
+                background-color: transparent;
+                color: rgba(255, 255, 255, 0.5);
+                border: none;
+                font-size: 14px;
+                font-weight: bold;
+                border-radius: 12px;
+            }
+            QPushButton:hover {
+                background-color: rgba(255, 100, 100, 0.3);
+                color: #ff6666;
+            }
+        """)
+        self.close_btn.clicked.connect(self._on_close_clicked)
+        close_btn_layout.addWidget(self.close_btn)
+        
+        container_layout.addLayout(close_btn_layout)
+        
+        # Header con info de canción (separado del botón)
         self.header = QLabel()
         self.header.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.header.setStyleSheet("""
@@ -478,6 +506,11 @@ class LyricsOverlay(QWidget):
     def _hide_indicator(self) -> None:
         """Oculta el indicador de offset."""
         self.offset_indicator.hide()
+    
+    def _on_close_clicked(self) -> None:
+        """Maneja el click en el botón de cerrar."""
+        logger.info("Botón cerrar presionado")
+        self.quit_requested.emit()
     
     def _show_sync_dialog(self) -> None:
         """Muestra el diálogo para establecer el tiempo de sincronización."""

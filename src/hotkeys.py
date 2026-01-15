@@ -32,7 +32,6 @@ class HotkeyAction(Enum):
     OFFSET_INCREASE = "offset_increase"
     OFFSET_DECREASE = "offset_decrease"
     OFFSET_RESET = "offset_reset"
-    QUIT_APP = "quit_app"
 
 
 @dataclass
@@ -61,7 +60,6 @@ class HotkeyManager:
         HotkeyConfig(HotkeyAction.OFFSET_INCREASE, "ctrl+alt+up", "Aumentar offset (+500ms)"),
         HotkeyConfig(HotkeyAction.OFFSET_DECREASE, "ctrl+alt+down", "Disminuir offset (-500ms)"),
         HotkeyConfig(HotkeyAction.OFFSET_RESET, "ctrl+alt+r", "Resetear offset"),
-        HotkeyConfig(HotkeyAction.QUIT_APP, "ctrl+shift+q", "Cerrar aplicación"),
     ]
     
     def __init__(self):

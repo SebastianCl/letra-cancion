@@ -99,8 +99,9 @@ class LetraCacionApp:
             self.tray.offset_decrease.connect(lambda: self._adjust_offset(-500))
             self.tray.quit_app.connect(self._quit)
             
-            # Conectar signal de sincronización manual del overlay
+            # Conectar signals del overlay
             self.overlay.sync_time_changed.connect(self._on_sync_time_changed)
+            self.overlay.quit_requested.connect(self._quit)
             
             # 5. Inicializar hotkeys
             logger.info("Inicializando hotkeys...")
@@ -214,9 +215,6 @@ class LetraCacionApp:
                 
         elif action == HotkeyAction.OFFSET_RESET:
             self._reset_offset()
-                
-        elif action == HotkeyAction.QUIT_APP:
-            self._quit()
     
     def _toggle_overlay(self) -> None:
         """Alterna la visibilidad del overlay."""
@@ -246,12 +244,27 @@ class LetraCacionApp:
             logger.info(f"Sincronización manual establecida: {time_ms}ms")
     
     def _quit(self) -> None:
-        """Cierra la aplicación."""
+        """Cierra la aplicación de forma segura."""
         logger.info("Cerrando aplicación...")
         self._running = False
         
+        # Detener componentes primero
+        try:
+            if self.sync_engine:
+                self.sync_engine.stop()
+            if self.hotkey_manager:
+                self.hotkey_manager.stop()
+            if self.overlay:
+                self.overlay.hide()
+                self.overlay.close()
+            if self.tray:
+                self.tray.hide()
+        except Exception as e:
+            logger.error(f"Error al limpiar recursos: {e}")
+        
+        # Salir del loop de Qt
         if self.app:
-            self.app.quit()
+            QTimer.singleShot(100, self.app.quit)
     
     async def run(self) -> None:
         """

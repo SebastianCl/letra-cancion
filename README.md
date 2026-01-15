@@ -49,7 +49,6 @@ python -m src.main
 | `Ctrl+Alt+↑` | Aumentar offset (+500ms) |
 | `Ctrl+Alt+↓` | Disminuir offset (-500ms) |
 | `Ctrl+Alt+R` | Resetear offset |
-| `Ctrl+Shift+Q` | Cerrar aplicación |
 
 ## 📁 Estructura del Proyecto
 
