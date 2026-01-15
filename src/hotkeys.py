@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 class HotkeyAction(Enum):
     """Acciones disponibles via hotkeys."""
     TOGGLE_OVERLAY = "toggle_overlay"
+    TOGGLE_TRANSLATION = "toggle_translation"
     OFFSET_INCREASE = "offset_increase"
     OFFSET_DECREASE = "offset_decrease"
     OFFSET_RESET = "offset_reset"
@@ -57,6 +58,7 @@ class HotkeyManager:
     # Hotkeys por defecto
     DEFAULT_HOTKEYS = [
         HotkeyConfig(HotkeyAction.TOGGLE_OVERLAY, "ctrl+shift+l", "Mostrar/ocultar overlay"),
+        HotkeyConfig(HotkeyAction.TOGGLE_TRANSLATION, "ctrl+t", "Mostrar/ocultar traducción"),
         HotkeyConfig(HotkeyAction.OFFSET_INCREASE, "ctrl+alt+up", "Aumentar offset (+500ms)"),
         HotkeyConfig(HotkeyAction.OFFSET_DECREASE, "ctrl+alt+down", "Disminuir offset (-500ms)"),
         HotkeyConfig(HotkeyAction.OFFSET_RESET, "ctrl+alt+r", "Resetear offset"),

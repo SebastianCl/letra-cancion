@@ -15,3 +15,6 @@ pynput>=1.7.6
 
 # Utilidades
 python-dotenv>=1.0.0
+
+# Traducción de letras
+deep-translator>=1.11.0
