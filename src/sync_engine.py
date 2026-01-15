@@ -79,6 +79,7 @@ class SyncEngine:
         
         # Control de loop - usar QTimer para no bloquear con asyncio
         self._running: bool = False
+        self._paused: bool = False  # Estado de pausa de reproducción
         self._update_interval_ms: int = 50  # 50ms para suavidad
         self._sync_timer: Optional[QTimer] = None
         
@@ -278,12 +279,29 @@ class SyncEngine:
     
     def _on_timer_tick(self) -> None:
         """Callback del timer - actualiza la sincronización."""
-        if not self._running:
+        if not self._running or self._paused:
             return
         try:
             self._update_sync()
         except Exception as e:
             logger.error(f"Error en loop de sincronización: {e}")
+    
+    def pause(self) -> None:
+        """Pausa la sincronización (cuando la música está pausada)."""
+        if not self._paused:
+            self._paused = True
+            logger.debug("Sincronización pausada")
+    
+    def resume(self) -> None:
+        """Reanuda la sincronización (cuando la música continúa)."""
+        if self._paused:
+            self._paused = False
+            logger.debug("Sincronización reanudada")
+    
+    @property
+    def is_paused(self) -> bool:
+        """Retorna True si la sincronización está pausada."""
+        return self._paused
     
     def stop(self) -> None:
         """Detiene el loop de sincronización."""

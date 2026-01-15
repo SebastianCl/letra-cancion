@@ -179,8 +179,12 @@ class LetraCacionApp:
         """Callback cuando cambia el estado de reproducción."""
         logger.debug(f"Playback: {playback.state.name}")
         
-        # Podríamos pausar el sync engine si está pausado
-        # pero lo dejamos corriendo para que responda rápido al resumir
+        # Pausar/reanudar el sync engine según el estado de reproducción
+        if self.sync_engine:
+            if playback.state == PlayerState.PLAYING:
+                self.sync_engine.resume()
+            else:
+                self.sync_engine.pause()
     
     def _on_sync_update(self, state: SyncState) -> None:
         """Callback cuando se actualiza la sincronización."""

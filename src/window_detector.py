@@ -104,6 +104,7 @@ class WindowTitleDetector:
         self._current_track: Optional[TrackInfo] = None
         self._current_playback: Optional[PlaybackInfo] = None
         self._last_window_title: str = ""
+        self._is_playing: bool = False  # Estado de reproducción
         
         # Callbacks
         self._on_track_changed: list[OnTrackChangedCallback] = []
@@ -111,6 +112,7 @@ class WindowTitleDetector:
         
         # Para estimar posición (sin SMTC no tenemos posición real)
         self._playback_start_time: Optional[datetime] = None
+        self._paused_position_ms: int = 0  # Posición al pausar
         
         # Windows API
         self._user32 = ctypes.windll.user32
@@ -127,7 +129,8 @@ class WindowTitleDetector:
         Returns:
             Título de la ventana o None si no se encuentra.
         """
-        result = []
+        qobuz_windows = []
+        other_windows = []
         
         def enum_callback(hwnd, _):
             if self._user32.IsWindowVisible(hwnd):
@@ -136,25 +139,45 @@ class WindowTitleDetector:
                     buff = ctypes.create_unicode_buffer(length + 1)
                     self._user32.GetWindowTextW(hwnd, buff, length + 1)
                     title = buff.value
+                    title_lower = title.lower()
                     
-                    # Buscar ventana con patrón "Título - Artista"
-                    # que NO sea solo "Qobuz" o similar
-                    if title and ' - ' in title:
-                        title_lower = title.lower()
-                        # Verificar que no sea un título a ignorar
-                        if not any(ign == title_lower for ign in self.IGNORE_TITLES):
-                            # Verificar que parece ser música (tiene artista - título)
-                            result.append(title)
+                    # Ignorar títulos específicos que NO son música
+                    ignore_apps = ['visual studio', 'chrome', 'firefox', 'edge', 
+                                   'explorer', 'powershell', 'cmd', 'terminal',
+                                   'copilot', 'github', 'cursor']
+                    if any(skip in title_lower for skip in ignore_apps):
+                        return True
+                    
+                    # Ventanas que contienen "qobuz" son prioritarias
+                    if 'qobuz' in title_lower:
+                        # Si tiene el formato "Canción - Artista", es música
+                        if ' - ' in title and title_lower not in self.IGNORE_TITLES:
+                            qobuz_windows.insert(0, title)  # Prioridad alta
+                        else:
+                            # Es Qobuz pero sin canción (pausa, navegación, etc.)
+                            qobuz_windows.append(('qobuz_idle', title))
+                    elif ' - ' in title:
+                        # Otras ventanas con formato "X - Y"
+                        if title_lower not in self.IGNORE_TITLES:
+                            other_windows.append(title)
             return True
         
         WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
         self._user32.EnumWindows(WNDENUMPROC(enum_callback), 0)
         
-        # Retornar el primer resultado que parezca música
-        for title in result:
-            # Filtrar títulos que claramente no son música
-            if not any(skip in title.lower() for skip in ['visual studio', 'chrome', 'firefox', 'edge', 'explorer']):
-                return title
+        # Prioridad 1: Ventana de Qobuz con canción
+        for item in qobuz_windows:
+            if isinstance(item, str):  # Es un título con canción
+                return item
+        
+        # Si solo encontramos Qobuz idle (sin canción), retornar None
+        # pero NO borrar el track actual (la canción podría estar pausada)
+        if qobuz_windows:
+            return None
+        
+        # Prioridad 2: Otras ventanas (para otros reproductores)
+        for title in other_windows:
+            return title
         
         return None
     
@@ -195,41 +218,73 @@ class WindowTitleDetector:
         return None
     
     def _check_for_changes(self) -> None:
-        """Verifica si cambió la canción."""
+        """Verifica si cambió la canción o el estado de reproducción."""
         window_title = self._get_qobuz_window_title()
         
-        # Si no hay ventana con música
+        # Si no hay ventana con canción activa
         if window_title is None:
-            if self._current_track is not None:
-                self._current_track = None
-                self._playback_start_time = None
-                self._notify_track_changed(None)
+            # Si estábamos reproduciendo, ahora estamos pausados
+            if self._is_playing and self._current_track is not None:
+                # Guardar posición ANTES de cambiar estado (para que el cálculo sea correcto)
+                current_pos = self.get_interpolated_position_ms()
+                self._is_playing = False
+                self._paused_position_ms = current_pos
+                
+                self._current_playback = PlaybackInfo(
+                    state=PlayerState.STOPPED,
+                    position_ms=self._paused_position_ms,
+                    duration_ms=0,
+                    last_updated=datetime.now()
+                )
+                
+                logger.info(f"Reproducción pausada en posición {self._paused_position_ms}ms")
+                self._notify_playback_changed(self._current_playback)
             return
         
-        # Si el título cambió
-        if window_title != self._last_window_title:
+        # Hay ventana con canción - parsear título
+        new_track = self._parse_window_title(window_title)
+        
+        if new_track is None:
+            return
+        
+        # Verificar si es la misma canción o una nueva
+        is_same_track = (self._current_track is not None and 
+                         self._current_track.matches(new_track))
+        
+        if is_same_track:
+            # Misma canción - verificar si estábamos pausados y ahora reproduciendo
+            if not self._is_playing:
+                self._is_playing = True
+                # Reanudar: el tiempo de inicio es AHORA, la posición guardada se mantiene
+                self._playback_start_time = datetime.now()
+                
+                self._current_playback = PlaybackInfo(
+                    state=PlayerState.PLAYING,
+                    position_ms=self._paused_position_ms,
+                    duration_ms=0,
+                    last_updated=datetime.now()
+                )
+                
+                logger.info(f"Reproducción reanudada desde posición {self._paused_position_ms}ms")
+                self._notify_playback_changed(self._current_playback)
+        else:
+            # Nueva canción - reiniciar todo
+            self._current_track = new_track
+            self._is_playing = True
+            self._playback_start_time = datetime.now()
+            self._paused_position_ms = 0  # Nueva canción empieza en 0
             self._last_window_title = window_title
             
-            # Parsear nuevo título
-            new_track = self._parse_window_title(window_title)
+            self._current_playback = PlaybackInfo(
+                state=PlayerState.PLAYING,
+                position_ms=0,
+                duration_ms=0,
+                last_updated=datetime.now()
+            )
             
-            if new_track is not None:
-                # Verificar si es diferente al track actual
-                if self._current_track is None or not self._current_track.matches(new_track):
-                    self._current_track = new_track
-                    self._playback_start_time = datetime.now()
-                    
-                    # Crear playback info
-                    self._current_playback = PlaybackInfo(
-                        state=PlayerState.PLAYING,
-                        position_ms=0,
-                        duration_ms=0,  # No tenemos duración sin SMTC
-                        last_updated=datetime.now()
-                    )
-                    
-                    logger.info(f"Nueva canción detectada: {new_track}")
-                    self._notify_track_changed(new_track)
-                    self._notify_playback_changed(self._current_playback)
+            logger.info(f"Nueva canción detectada: {new_track}")
+            self._notify_track_changed(new_track)
+            self._notify_playback_changed(self._current_playback)
     
     def _notify_track_changed(self, track: Optional[TrackInfo]) -> None:
         """Notifica cambio de track."""
@@ -270,19 +325,25 @@ class WindowTitleDetector:
     @property
     def is_playing(self) -> bool:
         """Retorna True si está reproduciendo."""
-        return self._current_track is not None
+        return self._is_playing and self._current_track is not None
     
     def get_interpolated_position_ms(self) -> int:
         """
         Estima la posición actual basándose en tiempo transcurrido.
         
         Sin SMTC no tenemos posición real, así que estimamos.
+        Tiene en cuenta la posición guardada al pausar.
         """
-        if self._playback_start_time is None:
-            return 0
+        if not self._is_playing:
+            # Si está pausado, retornar la posición guardada
+            return self._paused_position_ms
         
+        if self._playback_start_time is None:
+            return self._paused_position_ms
+        
+        # Posición = posición al pausar + tiempo transcurrido desde que se reanudó
         elapsed = datetime.now() - self._playback_start_time
-        return int(elapsed.total_seconds() * 1000)
+        return self._paused_position_ms + int(elapsed.total_seconds() * 1000)
     
     async def start_polling(self) -> None:
         """Inicia el loop de polling."""
