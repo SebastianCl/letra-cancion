@@ -105,6 +105,8 @@ class LyricsOverlay(QWidget):
         self._lyrics: Optional[LyricsData] = None
         self._current_line_index: int = -1
         self._drag_position: Optional[QPoint] = None
+        self._resize_edge: Optional[str] = None  # Para redimensionar desde esquinas
+        self._resize_start_rect: Optional[tuple] = None
         
         self._setup_window()
         self._setup_ui()
@@ -113,6 +115,9 @@ class LyricsOverlay(QWidget):
         self._indicator_timer = QTimer()
         self._indicator_timer.timeout.connect(self._hide_indicator)
         self._indicator_timer.setSingleShot(True)
+        
+        # Habilitar tracking del mouse para cambiar cursor en bordes
+        self.setMouseTracking(True)
     
     def _setup_window(self) -> None:
         """Configura las propiedades de la ventana."""
@@ -347,27 +352,141 @@ class LyricsOverlay(QWidget):
         """Oculta el indicador de offset."""
         self.offset_indicator.hide()
     
-    # --- Eventos de mouse para arrastrar con click izquierdo ---
+    # --- Detección de bordes para redimensionar ---
+    
+    def _get_edge_at_pos(self, pos: QPoint) -> Optional[str]:
+        """
+        Detecta si el cursor está en un borde/esquina para redimensionar.
+        
+        Returns:
+            String indicando el borde ('right', 'bottom', 'corner') o None
+        """
+        margin = 12  # Píxeles de margen para detectar el borde
+        rect = self.rect()
+        
+        at_right = pos.x() >= rect.width() - margin
+        at_bottom = pos.y() >= rect.height() - margin
+        at_left = pos.x() <= margin
+        at_top = pos.y() <= margin
+        
+        # Esquinas tienen prioridad
+        if at_right and at_bottom:
+            return 'corner_br'
+        if at_left and at_bottom:
+            return 'corner_bl'
+        if at_right and at_top:
+            return 'corner_tr'
+        if at_left and at_top:
+            return 'corner_tl'
+        
+        # Luego bordes
+        if at_right:
+            return 'right'
+        if at_bottom:
+            return 'bottom'
+        if at_left:
+            return 'left'
+        if at_top:
+            return 'top'
+        
+        return None
+    
+    def _update_cursor_for_edge(self, edge: Optional[str]) -> None:
+        """Actualiza el cursor según el borde."""
+        if edge in ('corner_br', 'corner_tl'):
+            self.setCursor(Qt.CursorShape.SizeFDiagCursor)
+        elif edge in ('corner_bl', 'corner_tr'):
+            self.setCursor(Qt.CursorShape.SizeBDiagCursor)
+        elif edge in ('left', 'right'):
+            self.setCursor(Qt.CursorShape.SizeHorCursor)
+        elif edge in ('top', 'bottom'):
+            self.setCursor(Qt.CursorShape.SizeVerCursor)
+        elif self._drag_position is not None:
+            self.setCursor(Qt.CursorShape.SizeAllCursor)
+        else:
+            self.unsetCursor()
+    
+    # --- Eventos de mouse para arrastrar y redimensionar ---
     
     def mousePressEvent(self, event: QMouseEvent) -> None:
         """Maneja el click del mouse."""
         if event.button() == Qt.MouseButton.LeftButton:
-            # Click izquierdo: iniciar arrastre
-            self._drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-            self.setCursor(Qt.CursorShape.SizeAllCursor)
+            pos = event.position().toPoint()
+            edge = self._get_edge_at_pos(pos)
+            
+            if edge:
+                # Iniciar redimensionamiento
+                self._resize_edge = edge
+                self._resize_start_rect = (
+                    self.geometry().x(),
+                    self.geometry().y(),
+                    self.geometry().width(),
+                    self.geometry().height(),
+                    event.globalPosition().toPoint()
+                )
+            else:
+                # Iniciar arrastre
+                self._drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+                self.setCursor(Qt.CursorShape.SizeAllCursor)
+            
             event.accept()
     
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
         """Maneja el movimiento del mouse."""
-        if self._drag_position is not None and event.buttons() == Qt.MouseButton.LeftButton:
-            self.move(event.globalPosition().toPoint() - self._drag_position)
-            event.accept()
+        if event.buttons() == Qt.MouseButton.LeftButton:
+            if self._resize_edge and self._resize_start_rect:
+                # Redimensionando
+                self._do_resize(event.globalPosition().toPoint())
+                event.accept()
+            elif self._drag_position is not None:
+                # Arrastrando
+                self.move(event.globalPosition().toPoint() - self._drag_position)
+                event.accept()
+        else:
+            # Sin botón presionado: actualizar cursor según posición
+            edge = self._get_edge_at_pos(event.position().toPoint())
+            self._update_cursor_for_edge(edge)
+    
+    def _do_resize(self, global_pos: QPoint) -> None:
+        """Ejecuta el redimensionamiento."""
+        if not self._resize_start_rect:
+            return
+        
+        x, y, w, h, start_pos = self._resize_start_rect
+        dx = global_pos.x() - start_pos.x()
+        dy = global_pos.y() - start_pos.y()
+        
+        min_w, min_h = 300, 100  # Tamaño mínimo
+        max_w, max_h = 1200, 600  # Tamaño máximo
+        
+        new_x, new_y, new_w, new_h = x, y, w, h
+        
+        edge = self._resize_edge
+        
+        # Calcular nuevas dimensiones según el borde
+        if edge in ('right', 'corner_br', 'corner_tr'):
+            new_w = max(min_w, min(max_w, w + dx))
+        if edge in ('left', 'corner_bl', 'corner_tl'):
+            new_w = max(min_w, min(max_w, w - dx))
+            new_x = x + w - new_w
+        if edge in ('bottom', 'corner_br', 'corner_bl'):
+            new_h = max(min_h, min(max_h, h + dy))
+        if edge in ('top', 'corner_tr', 'corner_tl'):
+            new_h = max(min_h, min(max_h, h - dy))
+            new_y = y + h - new_h
+        
+        self.setGeometry(new_x, new_y, new_w, new_h)
     
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         """Maneja cuando se suelta el mouse."""
         if event.button() == Qt.MouseButton.LeftButton:
             self._drag_position = None
-            self.unsetCursor()
+            self._resize_edge = None
+            self._resize_start_rect = None
+            
+            # Actualizar cursor según posición actual
+            edge = self._get_edge_at_pos(event.position().toPoint())
+            self._update_cursor_for_edge(edge)
             event.accept()
     
     def paintEvent(self, event: QPaintEvent) -> None:
