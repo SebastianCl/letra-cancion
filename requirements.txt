@@ -1,0 +1,17 @@
+# Detección de música - Windows Media Session
+winsdk>=1.0.0b10
+
+# HTTP async para APIs de letras
+aiohttp>=3.9.0
+
+# UI - Overlay y System Tray
+PyQt6>=6.6.0
+
+# Integración asyncio con Qt event loop
+qasync>=0.27.0
+
+# Hotkeys globales
+pynput>=1.7.6
+
+# Utilidades
+python-dotenv>=1.0.0

@@ -1,0 +1,506 @@
+"""
+Overlay transparente para mostrar letras sincronizadas.
+
+Ventana sin bordes, siempre visible, con fondo semitransparente
+que muestra las letras con la línea actual resaltada.
+"""
+
+import logging
+from typing import Optional
+from dataclasses import dataclass
+
+from PyQt6.QtWidgets import (
+    QWidget, QVBoxLayout, QLabel, QHBoxLayout, QFrame,
+    QGraphicsDropShadowEffect, QSizeGrip
+)
+from PyQt6.QtCore import (
+    Qt, QPropertyAnimation, QEasingCurve, QPoint, QTimer,
+    pyqtSignal, QSize
+)
+from PyQt6.QtGui import (
+    QFont, QColor, QPalette, QMouseEvent, QPainter, QBrush,
+    QPaintEvent, QFontMetrics
+)
+
+from ..lrc_parser import LyricLine, LyricsData
+from ..sync_engine import SyncState, SyncMode
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class OverlayConfig:
+    """Configuración del overlay."""
+    width: int = 600
+    height: int = 200
+    opacity: float = 0.85
+    font_size: int = 18
+    font_family: str = "Segoe UI"
+    bg_color: str = "#1a1a2e"
+    text_color: str = "#ffffff"
+    highlight_color: str = "#00d4ff"
+    dim_color: str = "#666666"
+    lines_before: int = 2
+    lines_after: int = 2
+    show_progress: bool = True
+    show_sync_mode: bool = True
+
+
+class LyricLabel(QLabel):
+    """Label personalizado para una línea de letra."""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setWordWrap(True)
+        self._is_current = False
+        self._opacity = 1.0
+    
+    def set_current(self, is_current: bool) -> None:
+        """Marca esta línea como actual o no."""
+        self._is_current = is_current
+        self._update_style()
+    
+    def set_dim(self, is_dim: bool) -> None:
+        """Atenúa la línea."""
+        self._opacity = 0.5 if is_dim else 1.0
+        self._update_style()
+    
+    def _update_style(self) -> None:
+        """Actualiza el estilo visual."""
+        if self._is_current:
+            self.setStyleSheet(f"""
+                QLabel {{
+                    color: #00d4ff;
+                    font-weight: bold;
+                    font-size: 20px;
+                }}
+            """)
+        else:
+            self.setStyleSheet(f"""
+                QLabel {{
+                    color: rgba(255, 255, 255, {self._opacity});
+                    font-weight: normal;
+                    font-size: 16px;
+                }}
+            """)
+
+
+class LyricsOverlay(QWidget):
+    """
+    Overlay transparente para mostrar letras sincronizadas.
+    
+    Signals:
+        closed: Emitido cuando se cierra el overlay
+        move_requested: Emitido cuando se solicita mover
+    """
+    
+    closed = pyqtSignal()
+    move_requested = pyqtSignal()
+    
+    def __init__(self, config: Optional[OverlayConfig] = None):
+        super().__init__()
+        
+        self.config = config or OverlayConfig()
+        self._lyrics: Optional[LyricsData] = None
+        self._current_line_index: int = -1
+        self._drag_position: Optional[QPoint] = None
+        self._move_mode: bool = False
+        
+        self._setup_window()
+        self._setup_ui()
+        
+        # Timer para ocultar indicadores temporales
+        self._indicator_timer = QTimer()
+        self._indicator_timer.timeout.connect(self._hide_indicator)
+        self._indicator_timer.setSingleShot(True)
+    
+    def _setup_window(self) -> None:
+        """Configura las propiedades de la ventana."""
+        # Flags de ventana
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint |
+            Qt.WindowType.WindowStaysOnTopHint |
+            Qt.WindowType.Tool  # No aparece en taskbar
+        )
+        
+        # Fondo transparente
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        
+        # Tamaño
+        self.setFixedSize(self.config.width, self.config.height)
+        
+        # Posición inicial (centrado en la parte inferior)
+        screen = self.screen()
+        if screen:
+            screen_rect = screen.availableGeometry()
+            x = (screen_rect.width() - self.config.width) // 2
+            y = screen_rect.height() - self.config.height - 100  # 100px desde abajo
+            self.move(x, y)
+    
+    def _setup_ui(self) -> None:
+        """Configura la interfaz de usuario."""
+        # Layout principal
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Container con fondo
+        self.container = QFrame()
+        self.container.setObjectName("container")
+        self.container.setStyleSheet(f"""
+            QFrame#container {{
+                background-color: rgba(26, 26, 46, {int(self.config.opacity * 255)});
+                border-radius: 15px;
+                border: 1px solid rgba(255, 255, 255, 0.1);
+            }}
+        """)
+        
+        container_layout = QVBoxLayout(self.container)
+        container_layout.setContentsMargins(20, 15, 20, 15)
+        container_layout.setSpacing(8)
+        
+        # Header con info
+        self.header = QLabel()
+        self.header.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.header.setStyleSheet("""
+            QLabel {
+                color: rgba(255, 255, 255, 0.6);
+                font-size: 11px;
+                padding: 2px;
+            }
+        """)
+        self.header.hide()
+        container_layout.addWidget(self.header)
+        
+        # Área de letras
+        self.lyrics_container = QWidget()
+        lyrics_layout = QVBoxLayout(self.lyrics_container)
+        lyrics_layout.setContentsMargins(0, 0, 0, 0)
+        lyrics_layout.setSpacing(4)
+        
+        # Crear labels para las líneas
+        total_lines = self.config.lines_before + 1 + self.config.lines_after
+        self.line_labels: list[LyricLabel] = []
+        
+        for i in range(total_lines):
+            label = LyricLabel()
+            label.setFont(QFont(self.config.font_family, self.config.font_size))
+            self.line_labels.append(label)
+            lyrics_layout.addWidget(label)
+        
+        container_layout.addWidget(self.lyrics_container)
+        
+        # Footer con progreso e indicadores
+        footer_layout = QHBoxLayout()
+        footer_layout.setContentsMargins(0, 5, 0, 0)
+        
+        # Indicador de modo sync
+        self.sync_indicator = QLabel()
+        self.sync_indicator.setStyleSheet("""
+            QLabel {
+                color: rgba(255, 255, 255, 0.5);
+                font-size: 10px;
+            }
+        """)
+        footer_layout.addWidget(self.sync_indicator)
+        
+        footer_layout.addStretch()
+        
+        # Indicador de offset
+        self.offset_indicator = QLabel()
+        self.offset_indicator.setStyleSheet("""
+            QLabel {
+                color: #00d4ff;
+                font-size: 10px;
+                font-weight: bold;
+            }
+        """)
+        self.offset_indicator.hide()
+        footer_layout.addWidget(self.offset_indicator)
+        
+        footer_layout.addStretch()
+        
+        # Progreso
+        self.progress_label = QLabel()
+        self.progress_label.setStyleSheet("""
+            QLabel {
+                color: rgba(255, 255, 255, 0.5);
+                font-size: 10px;
+            }
+        """)
+        footer_layout.addWidget(self.progress_label)
+        
+        container_layout.addLayout(footer_layout)
+        
+        main_layout.addWidget(self.container)
+        
+        # Mensaje inicial
+        self._show_message("🎵 Esperando música...")
+    
+    def _show_message(self, message: str) -> None:
+        """Muestra un mensaje centrado."""
+        # Ocultar todas las líneas excepto la central
+        center_idx = self.config.lines_before
+        
+        for i, label in enumerate(self.line_labels):
+            if i == center_idx:
+                label.setText(message)
+                label.setStyleSheet("""
+                    QLabel {
+                        color: rgba(255, 255, 255, 0.7);
+                        font-size: 16px;
+                    }
+                """)
+                label.show()
+            else:
+                label.setText("")
+                label.hide()
+        
+        self.progress_label.setText("")
+        self.sync_indicator.setText("")
+    
+    def set_lyrics(self, lyrics: Optional[LyricsData]) -> None:
+        """
+        Establece las letras a mostrar.
+        
+        Args:
+            lyrics: Datos de letras o None para limpiar.
+        """
+        self._lyrics = lyrics
+        self._current_line_index = -1
+        
+        if lyrics is None or not lyrics.lines:
+            self._show_message("🎵 Esperando música...")
+            return
+        
+        # Mostrar todas las líneas
+        for label in self.line_labels:
+            label.show()
+        
+        # Actualizar header con info de la canción
+        if lyrics.title and lyrics.artist:
+            self.header.setText(f"♪ {lyrics.artist} - {lyrics.title}")
+            self.header.show()
+        else:
+            self.header.hide()
+        
+        logger.info(f"Letras cargadas: {len(lyrics.lines)} líneas")
+    
+    def update_sync(self, state: SyncState) -> None:
+        """
+        Actualiza la visualización según el estado de sincronización.
+        
+        Args:
+            state: Estado actual de sincronización.
+        """
+        if self._lyrics is None or not self._lyrics.lines:
+            return
+        
+        self._current_line_index = state.current_line_index
+        
+        # Obtener líneas de contexto
+        context = self._lyrics.get_context_lines(
+            state.current_line_index,
+            before=self.config.lines_before,
+            after=self.config.lines_after
+        )
+        
+        # Limpiar todas las líneas
+        for label in self.line_labels:
+            label.setText("")
+            label.set_current(False)
+            label.set_dim(False)
+        
+        # Mapear contexto a labels
+        center_idx = self.config.lines_before
+        
+        for relative_idx, line in context:
+            label_idx = center_idx + relative_idx
+            
+            if 0 <= label_idx < len(self.line_labels):
+                label = self.line_labels[label_idx]
+                label.setText(line.text)
+                label.set_current(relative_idx == 0)
+                label.set_dim(relative_idx != 0)
+        
+        # Actualizar indicadores
+        if self.config.show_progress:
+            current, total = state.current_line_index + 1, len(self._lyrics.lines)
+            self.progress_label.setText(f"{current}/{total}")
+        
+        if self.config.show_sync_mode:
+            mode_text = "⏱ Sync" if state.mode == SyncMode.SYNCED else "📜 Estimado"
+            self.sync_indicator.setText(mode_text)
+    
+    def show_offset_indicator(self, offset_ms: int) -> None:
+        """Muestra temporalmente el indicador de offset."""
+        sign = "+" if offset_ms >= 0 else ""
+        self.offset_indicator.setText(f"Offset: {sign}{offset_ms}ms")
+        self.offset_indicator.show()
+        
+        # Ocultar después de 2 segundos
+        self._indicator_timer.start(2000)
+    
+    def _hide_indicator(self) -> None:
+        """Oculta el indicador de offset."""
+        self.offset_indicator.hide()
+    
+    def set_move_mode(self, enabled: bool) -> None:
+        """
+        Activa/desactiva el modo de mover ventana.
+        
+        Args:
+            enabled: True para permitir arrastrar la ventana.
+        """
+        self._move_mode = enabled
+        
+        if enabled:
+            self.setCursor(Qt.CursorShape.SizeAllCursor)
+            self.container.setStyleSheet(f"""
+                QFrame#container {{
+                    background-color: rgba(26, 26, 46, {int(self.config.opacity * 255)});
+                    border-radius: 15px;
+                    border: 2px solid #00d4ff;
+                }}
+            """)
+        else:
+            self.unsetCursor()
+            self.container.setStyleSheet(f"""
+                QFrame#container {{
+                    background-color: rgba(26, 26, 46, {int(self.config.opacity * 255)});
+                    border-radius: 15px;
+                    border: 1px solid rgba(255, 255, 255, 0.1);
+                }}
+            """)
+    
+    # --- Eventos de mouse para arrastrar ---
+    
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        """Maneja el click del mouse."""
+        if event.button() == Qt.MouseButton.LeftButton:
+            if self._move_mode:
+                self._drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+                event.accept()
+    
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        """Maneja el movimiento del mouse."""
+        if self._move_mode and self._drag_position is not None:
+            if event.buttons() == Qt.MouseButton.LeftButton:
+                self.move(event.globalPosition().toPoint() - self._drag_position)
+                event.accept()
+    
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        """Maneja cuando se suelta el mouse."""
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_position = None
+            if self._move_mode:
+                self.set_move_mode(False)
+    
+    def paintEvent(self, event: QPaintEvent) -> None:
+        """Dibuja el fondo transparente."""
+        # El fondo se maneja via stylesheet del container
+        pass
+    
+    # --- API pública adicional ---
+    
+    def toggle_visibility(self) -> bool:
+        """
+        Alterna la visibilidad del overlay.
+        
+        Returns:
+            True si ahora es visible, False si está oculto.
+        """
+        if self.isVisible():
+            self.hide()
+            return False
+        else:
+            self.show()
+            return True
+    
+    def set_no_lyrics_available(self) -> None:
+        """Muestra mensaje de que no hay letras disponibles."""
+        self._show_message("📝 Letra no disponible")
+    
+    def set_searching_lyrics(self) -> None:
+        """Muestra mensaje de búsqueda en progreso."""
+        self._show_message("🔍 Buscando letra...")
+    
+    def set_track_info(self, artist: str, title: str) -> None:
+        """
+        Actualiza la info del track en el header.
+        
+        Args:
+            artist: Nombre del artista
+            title: Título de la canción
+        """
+        self.header.setText(f"♪ {artist} - {title}")
+        self.header.show()
+
+
+# --- Demo standalone ---
+def main():
+    """Demo del overlay."""
+    import sys
+    from PyQt6.QtWidgets import QApplication
+    from PyQt6.QtCore import QTimer
+    
+    app = QApplication(sys.argv)
+    
+    # Crear overlay
+    overlay = LyricsOverlay()
+    overlay.show()
+    
+    # Simular letras
+    from ..lrc_parser import LRCParser
+    
+    sample_lrc = """
+[00:00.00]♪ Intro instrumental ♪
+[00:12.00]This is the first line of the song
+[00:17.20]And here comes the second line
+[00:22.50]The melody continues to flow
+[00:28.00]With words that touch the soul
+[00:33.45]Building up to the chorus now
+[00:38.90]Here we go, let's sing along
+[00:44.00]The rhythm takes control tonight
+[00:50.00]Dancing under starry lights
+    """
+    
+    lyrics = LRCParser.parse(sample_lrc)
+    lyrics.title = "Demo Song"
+    lyrics.artist = "Demo Artist"
+    
+    # Timer para simular reproducción
+    current_line = [0]
+    
+    def simulate_playback():
+        if current_line[0] < len(lyrics.lines):
+            from ..sync_engine import SyncState, SyncMode
+            
+            state = SyncState(
+                mode=SyncMode.SYNCED,
+                current_line_index=current_line[0],
+                current_line=lyrics.lines[current_line[0]],
+                position_ms=lyrics.lines[current_line[0]].timestamp_ms,
+                is_playing=True,
+                offset_ms=0
+            )
+            
+            overlay.update_sync(state)
+            current_line[0] += 1
+    
+    # Esperar un poco y luego cargar letras
+    QTimer.singleShot(1000, lambda: overlay.set_lyrics(lyrics))
+    
+    # Timer para simular avance de letras
+    timer = QTimer()
+    timer.timeout.connect(simulate_playback)
+    QTimer.singleShot(1500, lambda: timer.start(3000))  # Una línea cada 3 segundos
+    
+    # Mostrar indicador de offset después de un rato
+    QTimer.singleShot(5000, lambda: overlay.show_offset_indicator(500))
+    
+    sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()
