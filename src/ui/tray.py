@@ -24,6 +24,8 @@ class TrayIcon(QObject):
         show_overlay: Solicita mostrar el overlay
         hide_overlay: Solicita ocultar el overlay
         offset_reset: Solicita resetear el offset
+        offset_increase: Solicita aumentar offset
+        offset_decrease: Solicita disminuir offset
         quit_app: Solicita cerrar la aplicación
     """
     
@@ -32,6 +34,8 @@ class TrayIcon(QObject):
     hide_overlay = pyqtSignal()
     toggle_overlay = pyqtSignal()
     offset_reset = pyqtSignal()
+    offset_increase = pyqtSignal()
+    offset_decrease = pyqtSignal()
     open_settings = pyqtSignal()
     quit_app = pyqtSignal()
     
@@ -99,10 +103,25 @@ class TrayIcon(QObject):
         self._toggle_action.triggered.connect(self._on_toggle_clicked)
         self._menu.addAction(self._toggle_action)
         
+        # Submenú de sincronización
+        sync_menu = self._menu.addMenu("⏱ Sincronización")
+        
+        # Aumentar offset
+        offset_up_action = QAction("⬆ Retrasar letra (+500ms)")
+        offset_up_action.triggered.connect(lambda: self.offset_increase.emit())
+        sync_menu.addAction(offset_up_action)
+        
+        # Disminuir offset
+        offset_down_action = QAction("⬇ Adelantar letra (-500ms)")
+        offset_down_action.triggered.connect(lambda: self.offset_decrease.emit())
+        sync_menu.addAction(offset_down_action)
+        
+        sync_menu.addSeparator()
+        
         # Resetear offset
         reset_action = QAction("🔄 Resetear sincronización")
         reset_action.triggered.connect(lambda: self.offset_reset.emit())
-        self._menu.addAction(reset_action)
+        sync_menu.addAction(reset_action)
         
         self._menu.addSeparator()
         

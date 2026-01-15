@@ -41,7 +41,7 @@ class LetraCacionApp:
     
     def __init__(self):
         # Componentes
-        self.detector: Optional[MediaDetector] = None
+        self.detector: Optional[WindowTitleDetector] = None
         self.lyrics_service: Optional[LyricsService] = None
         self.sync_engine: Optional[SyncEngine] = None
         self.hotkey_manager: Optional[HotkeyManager] = None
@@ -95,6 +95,8 @@ class LetraCacionApp:
             # Conectar signals del tray
             self.tray.toggle_overlay.connect(self._toggle_overlay)
             self.tray.offset_reset.connect(self._reset_offset)
+            self.tray.offset_increase.connect(lambda: self._adjust_offset(500))
+            self.tray.offset_decrease.connect(lambda: self._adjust_offset(-500))
             self.tray.quit_app.connect(self._quit)
             
             # 5. Inicializar hotkeys
@@ -224,7 +226,15 @@ class LetraCacionApp:
         """Resetea el offset de sincronización."""
         if self.sync_engine:
             self.sync_engine.reset_offset()
-            self.overlay.show_offset_indicator(0)
+            if self.overlay:
+                self.overlay.show_offset_indicator(0)
+    
+    def _adjust_offset(self, delta_ms: int) -> None:
+        """Ajusta el offset de sincronización."""
+        if self.sync_engine:
+            new_offset = self.sync_engine.adjust_offset(delta_ms)
+            if self.overlay:
+                self.overlay.show_offset_indicator(new_offset)
     
     def _quit(self) -> None:
         """Cierra la aplicación."""

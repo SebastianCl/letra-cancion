@@ -1,8 +1,7 @@
 """
-Gestor de hotkeys globales.
+Gestor de hotkeys globales usando la librería 'keyboard'.
 
-Captura combinaciones de teclas a nivel de sistema
-para controlar la aplicación desde cualquier lugar.
+Más simple y confiable en Windows que pynput.
 
 Hotkeys configurados:
 - Ctrl+Shift+L: Toggle visibilidad del overlay
@@ -17,8 +16,12 @@ from enum import Enum
 from typing import Callable, Optional
 from dataclasses import dataclass
 
-from pynput import keyboard
-from pynput.keyboard import Key, KeyCode
+try:
+    import keyboard
+    KEYBOARD_AVAILABLE = True
+except ImportError:
+    KEYBOARD_AVAILABLE = False
+    print("WARNING: 'keyboard' library not available. Install with: pip install keyboard")
 
 logger = logging.getLogger(__name__)
 
@@ -34,28 +37,11 @@ class HotkeyAction(Enum):
 
 
 @dataclass
-class Hotkey:
-    """Representa una combinación de teclas."""
+class HotkeyConfig:
+    """Configuración de un hotkey."""
     action: HotkeyAction
-    modifiers: frozenset  # Set de modificadores (ctrl, shift, alt)
-    key: Optional[KeyCode]  # Tecla principal
+    keys: str  # Formato: "ctrl+shift+l"
     description: str
-    
-    def matches(self, current_modifiers: set, key: keyboard.Key | keyboard.KeyCode) -> bool:
-        """Verifica si la combinación actual coincide con este hotkey."""
-        # Verificar modificadores
-        if self.modifiers != current_modifiers:
-            return False
-        
-        # Verificar tecla principal
-        if self.key is None:
-            return True
-        
-        # Comparar tecla
-        if isinstance(key, KeyCode) and isinstance(self.key, KeyCode):
-            return key.char == self.key.char if hasattr(key, 'char') and hasattr(self.key, 'char') else key == self.key
-        
-        return key == self.key
 
 
 # Tipo para callbacks de acciones
@@ -64,133 +50,36 @@ HotkeyCallback = Callable[[HotkeyAction], None]
 
 class HotkeyManager:
     """
-    Gestor de hotkeys globales usando pynput.
+    Gestor de hotkeys globales usando la librería keyboard.
     
-    Captura combinaciones de teclas a nivel de sistema operativo.
+    Más simple y confiable que pynput en Windows.
+    Requiere ejecutar como administrador para algunos hotkeys.
     """
     
-    # Modificadores reconocidos
-    MODIFIER_KEYS = {
-        Key.ctrl_l, Key.ctrl_r,
-        Key.shift_l, Key.shift_r,
-        Key.alt_l, Key.alt_r,
-        Key.alt_gr,
-        Key.cmd_l, Key.cmd_r,  # Windows key
-    }
+    # Hotkeys por defecto
+    DEFAULT_HOTKEYS = [
+        HotkeyConfig(HotkeyAction.TOGGLE_OVERLAY, "ctrl+shift+l", "Mostrar/ocultar overlay"),
+        HotkeyConfig(HotkeyAction.OFFSET_INCREASE, "ctrl+alt+up", "Aumentar offset (+500ms)"),
+        HotkeyConfig(HotkeyAction.OFFSET_DECREASE, "ctrl+alt+down", "Disminuir offset (-500ms)"),
+        HotkeyConfig(HotkeyAction.OFFSET_RESET, "ctrl+alt+r", "Resetear offset"),
+        HotkeyConfig(HotkeyAction.MOVE_OVERLAY, "ctrl+shift+m", "Mover overlay"),
+        HotkeyConfig(HotkeyAction.QUIT_APP, "ctrl+shift+q", "Cerrar aplicación"),
+    ]
     
     def __init__(self):
         """Inicializa el gestor de hotkeys."""
-        self._listener: Optional[keyboard.Listener] = None
-        self._current_modifiers: set = set()
         self._callbacks: list[HotkeyCallback] = []
-        self._hotkeys: list[Hotkey] = []
+        self._hotkeys: list[HotkeyConfig] = self.DEFAULT_HOTKEYS.copy()
         self._enabled: bool = True
-        
-        # Configurar hotkeys por defecto
-        self._setup_default_hotkeys()
+        self._registered_hooks: list = []
     
-    def _setup_default_hotkeys(self) -> None:
-        """Configura los hotkeys por defecto."""
-        self._hotkeys = [
-            # Ctrl+Shift+L: Toggle overlay
-            Hotkey(
-                action=HotkeyAction.TOGGLE_OVERLAY,
-                modifiers=frozenset({'ctrl', 'shift'}),
-                key=KeyCode.from_char('l'),
-                description="Toggle visibilidad del overlay"
-            ),
-            # Ctrl+Alt+Up: Aumentar offset
-            Hotkey(
-                action=HotkeyAction.OFFSET_INCREASE,
-                modifiers=frozenset({'ctrl', 'alt'}),
-                key=Key.up,
-                description="Aumentar offset de sincronización"
-            ),
-            # Ctrl+Alt+Down: Disminuir offset
-            Hotkey(
-                action=HotkeyAction.OFFSET_DECREASE,
-                modifiers=frozenset({'ctrl', 'alt'}),
-                key=Key.down,
-                description="Disminuir offset de sincronización"
-            ),
-            # Ctrl+Alt+R: Resetear offset
-            Hotkey(
-                action=HotkeyAction.OFFSET_RESET,
-                modifiers=frozenset({'ctrl', 'alt'}),
-                key=KeyCode.from_char('r'),
-                description="Resetear offset a 0"
-            ),
-            # Ctrl+Shift+M: Modo mover
-            Hotkey(
-                action=HotkeyAction.MOVE_OVERLAY,
-                modifiers=frozenset({'ctrl', 'shift'}),
-                key=KeyCode.from_char('m'),
-                description="Activar modo mover overlay"
-            ),
-            # Ctrl+Shift+Q: Salir
-            Hotkey(
-                action=HotkeyAction.QUIT_APP,
-                modifiers=frozenset({'ctrl', 'shift'}),
-                key=KeyCode.from_char('q'),
-                description="Cerrar aplicación"
-            ),
-        ]
-    
-    def _normalize_modifier(self, key: Key) -> Optional[str]:
-        """Normaliza una tecla modificadora a string."""
-        if key in (Key.ctrl_l, Key.ctrl_r):
-            return 'ctrl'
-        elif key in (Key.shift_l, Key.shift_r):
-            return 'shift'
-        elif key in (Key.alt_l, Key.alt_r, Key.alt_gr):
-            return 'alt'
-        elif key in (Key.cmd_l, Key.cmd_r):
-            return 'win'
-        return None
-    
-    def _on_press(self, key: keyboard.Key | keyboard.KeyCode) -> None:
-        """Callback cuando se presiona una tecla."""
-        if not self._enabled:
-            return
-        
-        # Actualizar modificadores activos
-        if key in self.MODIFIER_KEYS:
-            modifier = self._normalize_modifier(key)
-            if modifier:
-                self._current_modifiers.add(modifier)
-            return
-        
-        # Buscar hotkey que coincida
-        current_mods = frozenset(self._current_modifiers)
-        
-        for hotkey in self._hotkeys:
-            if hotkey.modifiers == current_mods:
-                # Verificar tecla principal
-                key_matches = False
-                
-                if hotkey.key is None:
-                    key_matches = True
-                elif isinstance(hotkey.key, Key):
-                    key_matches = (key == hotkey.key)
-                elif isinstance(hotkey.key, KeyCode):
-                    if isinstance(key, KeyCode):
-                        # Comparar caracteres
-                        hotkey_char = hotkey.key.char.lower() if hotkey.key.char else None
-                        key_char = key.char.lower() if hasattr(key, 'char') and key.char else None
-                        key_matches = (hotkey_char == key_char)
-                
-                if key_matches:
-                    logger.debug(f"Hotkey detectado: {hotkey.action.value}")
-                    self._trigger_action(hotkey.action)
-                    return
-    
-    def _on_release(self, key: keyboard.Key | keyboard.KeyCode) -> None:
-        """Callback cuando se suelta una tecla."""
-        # Actualizar modificadores activos
-        if key in self.MODIFIER_KEYS:
-            modifier = self._normalize_modifier(key)
-            if modifier:
-                self._current_modifiers.discard(modifier)
+    def _create_handler(self, action: HotkeyAction):
+        """Crea un handler para una acción específica."""
+        def handler():
+            if self._enabled:
+                logger.info(f"Hotkey activado: {action.value}")
+                self._trigger_action(action)
+        return handler
     
     def _trigger_action(self, action: HotkeyAction) -> None:
         """Dispara los callbacks para una acción."""
@@ -213,30 +102,45 @@ class HotkeyManager:
     
     def start(self) -> None:
         """Inicia el listener de hotkeys."""
-        if self._listener is not None:
+        if not KEYBOARD_AVAILABLE:
+            logger.error("Librería 'keyboard' no disponible")
             return
         
-        self._listener = keyboard.Listener(
-            on_press=self._on_press,
-            on_release=self._on_release
-        )
-        self._listener.start()
+        # Registrar cada hotkey
+        for hk in self._hotkeys:
+            try:
+                hook = keyboard.add_hotkey(
+                    hk.keys,
+                    self._create_handler(hk.action),
+                    suppress=False,  # No bloquear la tecla para otras apps
+                    trigger_on_release=False
+                )
+                self._registered_hooks.append(hook)
+                logger.debug(f"Registrado: {hk.keys} -> {hk.action.value}")
+            except Exception as e:
+                logger.error(f"Error registrando hotkey {hk.keys}: {e}")
+        
         logger.info("HotkeyManager iniciado")
         
-        # Log de hotkeys disponibles
+        # Mostrar hotkeys disponibles
         print("\n📌 Hotkeys disponibles:")
-        for hotkey in self._hotkeys:
-            mods = '+'.join(sorted(hotkey.modifiers)).upper()
-            key_str = hotkey.key.char.upper() if isinstance(hotkey.key, KeyCode) and hotkey.key.char else str(hotkey.key).replace('Key.', '').upper()
-            print(f"   {mods}+{key_str}: {hotkey.description}")
+        for hk in self._hotkeys:
+            keys_display = hk.keys.replace('+', '+').upper()
+            print(f"   {keys_display}: {hk.description}")
         print()
     
     def stop(self) -> None:
-        """Detiene el listener de hotkeys."""
-        if self._listener is not None:
-            self._listener.stop()
-            self._listener = None
-            logger.info("HotkeyManager detenido")
+        """Detiene el listener y limpia los hotkeys."""
+        if not KEYBOARD_AVAILABLE:
+            return
+        
+        try:
+            keyboard.unhook_all_hotkeys()
+        except Exception as e:
+            logger.warning(f"Error limpiando hotkeys: {e}")
+        
+        self._registered_hooks.clear()
+        logger.info("HotkeyManager detenido")
     
     @property
     def enabled(self) -> bool:
@@ -249,13 +153,6 @@ class HotkeyManager:
         self._enabled = value
         logger.info(f"Hotkeys {'habilitados' if value else 'deshabilitados'}")
     
-    def get_hotkey_for_action(self, action: HotkeyAction) -> Optional[Hotkey]:
-        """Obtiene el hotkey configurado para una acción."""
-        for hotkey in self._hotkeys:
-            if hotkey.action == action:
-                return hotkey
-        return None
-    
     def get_hotkey_string(self, action: HotkeyAction) -> str:
         """
         Obtiene la representación en string de un hotkey.
@@ -264,49 +161,50 @@ class HotkeyManager:
             action: Acción del hotkey
             
         Returns:
-            String como "Ctrl+Shift+L"
+            String como "CTRL+SHIFT+L"
         """
-        hotkey = self.get_hotkey_for_action(action)
-        if hotkey is None:
-            return ""
-        
-        parts = [m.capitalize() for m in sorted(hotkey.modifiers)]
-        
-        if hotkey.key:
-            if isinstance(hotkey.key, KeyCode) and hotkey.key.char:
-                parts.append(hotkey.key.char.upper())
-            else:
-                parts.append(str(hotkey.key).replace('Key.', '').capitalize())
-        
-        return '+'.join(parts)
+        for hk in self._hotkeys:
+            if hk.action == action:
+                return hk.keys.upper()
+        return ""
 
 
-# --- Ejemplo de uso ---
+# --- Test ---
 def main():
-    """Ejemplo de uso del HotkeyManager."""
+    """Test del HotkeyManager."""
     import time
     
     logging.basicConfig(level=logging.DEBUG)
     
+    if not KEYBOARD_AVAILABLE:
+        print("ERROR: Librería keyboard no disponible")
+        print("Instalar con: pip install keyboard")
+        return
+    
     manager = HotkeyManager()
     
+    running = True
+    
     def on_action(action: HotkeyAction):
+        nonlocal running
         print(f"\n🎯 Acción detectada: {action.value}")
         
         if action == HotkeyAction.QUIT_APP:
             print("Saliendo...")
-            manager.stop()
+            running = False
     
     manager.on_hotkey(on_action)
     manager.start()
     
     print("\nPresiona los hotkeys configurados (Ctrl+Shift+Q para salir)...")
+    print("Esperando 60 segundos o hasta Ctrl+Shift+Q...")
     
     try:
-        while manager._listener and manager._listener.is_alive():
+        start_time = time.time()
+        while running and (time.time() - start_time) < 60:
             time.sleep(0.1)
     except KeyboardInterrupt:
-        pass
+        print("\nInterrumpido")
     finally:
         manager.stop()
     
