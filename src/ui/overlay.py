@@ -11,7 +11,8 @@ from dataclasses import dataclass
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QHBoxLayout, QFrame,
-    QGraphicsDropShadowEffect, QSizeGrip
+    QGraphicsDropShadowEffect, QSizeGrip, QDialog, QLineEdit,
+    QPushButton, QDialogButtonBox
 )
 from PyQt6.QtCore import (
     Qt, QPropertyAnimation, QEasingCurve, QPoint, QTimer,
@@ -86,6 +87,128 @@ class LyricLabel(QLabel):
             """)
 
 
+class SyncTimeDialog(QDialog):
+    """Diálogo para establecer el tiempo de sincronización manualmente."""
+    
+    def __init__(self, parent=None, current_position_ms: int = 0):
+        super().__init__(parent)
+        self.setWindowTitle("Sincronizar Letra")
+        self.setFixedSize(280, 150)
+        self.setWindowFlags(
+            Qt.WindowType.Dialog |
+            Qt.WindowType.WindowStaysOnTopHint
+        )
+        
+        # Estilo oscuro
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #1a1a2e;
+                color: white;
+            }
+            QLabel {
+                color: white;
+                font-size: 13px;
+            }
+            QLineEdit {
+                background-color: #2a2a4e;
+                color: white;
+                border: 1px solid #00d4ff;
+                border-radius: 5px;
+                padding: 8px;
+                font-size: 18px;
+                font-family: monospace;
+            }
+            QLineEdit:focus {
+                border: 2px solid #00d4ff;
+            }
+            QPushButton {
+                background-color: #00d4ff;
+                color: #1a1a2e;
+                border: none;
+                border-radius: 5px;
+                padding: 8px 16px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #00a8cc;
+            }
+            QPushButton:pressed {
+                background-color: #008899;
+            }
+            QPushButton#cancelBtn {
+                background-color: #444;
+                color: white;
+            }
+            QPushButton#cancelBtn:hover {
+                background-color: #555;
+            }
+        """)
+        
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+        
+        # Instrucción
+        label = QLabel("Ingresa el tiempo actual de la canción:")
+        layout.addWidget(label)
+        
+        # Campo de tiempo
+        self.time_input = QLineEdit()
+        self.time_input.setPlaceholderText("mm:ss")
+        self.time_input.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        # Mostrar tiempo actual como valor inicial
+        current_min = current_position_ms // 60000
+        current_sec = (current_position_ms % 60000) // 1000
+        self.time_input.setText(f"{current_min:02d}:{current_sec:02d}")
+        self.time_input.selectAll()
+        
+        layout.addWidget(self.time_input)
+        
+        # Botones
+        button_layout = QHBoxLayout()
+        
+        cancel_btn = QPushButton("Cancelar")
+        cancel_btn.setObjectName("cancelBtn")
+        cancel_btn.clicked.connect(self.reject)
+        
+        ok_btn = QPushButton("Sincronizar")
+        ok_btn.clicked.connect(self.accept)
+        ok_btn.setDefault(True)
+        
+        button_layout.addWidget(cancel_btn)
+        button_layout.addWidget(ok_btn)
+        layout.addLayout(button_layout)
+        
+        # Enter para aceptar
+        self.time_input.returnPressed.connect(self.accept)
+    
+    def get_time_ms(self) -> Optional[int]:
+        """
+        Parsea el tiempo ingresado y lo retorna en milisegundos.
+        
+        Returns:
+            Tiempo en ms o None si el formato es inválido.
+        """
+        text = self.time_input.text().strip()
+        
+        # Soportar formatos: mm:ss, m:ss, ss
+        try:
+            if ':' in text:
+                parts = text.split(':')
+                if len(parts) == 2:
+                    minutes = int(parts[0])
+                    seconds = int(parts[1])
+                    return (minutes * 60 + seconds) * 1000
+            else:
+                # Solo segundos
+                seconds = int(text)
+                return seconds * 1000
+        except ValueError:
+            return None
+        
+        return None
+
+
 class LyricsOverlay(QWidget):
     """
     Overlay transparente para mostrar letras sincronizadas.
@@ -93,10 +216,12 @@ class LyricsOverlay(QWidget):
     Signals:
         closed: Emitido cuando se cierra el overlay
         move_requested: Emitido cuando se solicita mover
+        sync_time_changed: Emitido cuando el usuario establece un nuevo tiempo (ms)
     """
     
     closed = pyqtSignal()
     move_requested = pyqtSignal()
+    sync_time_changed = pyqtSignal(int)  # Tiempo en milisegundos
     
     def __init__(self, config: Optional[OverlayConfig] = None):
         super().__init__()
@@ -104,6 +229,7 @@ class LyricsOverlay(QWidget):
         self.config = config or OverlayConfig()
         self._lyrics: Optional[LyricsData] = None
         self._current_line_index: int = -1
+        self._current_position_ms: int = 0  # Para mostrar en el diálogo
         self._drag_position: Optional[QPoint] = None
         self._resize_edge: Optional[str] = None  # Para redimensionar desde esquinas
         self._resize_start_rect: Optional[tuple] = None
@@ -304,6 +430,7 @@ class LyricsOverlay(QWidget):
             return
         
         self._current_line_index = state.current_line_index
+        self._current_position_ms = state.position_ms  # Guardar posición actual
         
         # Obtener líneas de contexto
         context = self._lyrics.get_context_lines(
@@ -351,6 +478,23 @@ class LyricsOverlay(QWidget):
     def _hide_indicator(self) -> None:
         """Oculta el indicador de offset."""
         self.offset_indicator.hide()
+    
+    def _show_sync_dialog(self) -> None:
+        """Muestra el diálogo para establecer el tiempo de sincronización."""
+        dialog = SyncTimeDialog(self, self._current_position_ms)
+        
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            time_ms = dialog.get_time_ms()
+            if time_ms is not None:
+                logger.info(f"Usuario estableció tiempo de sincronización: {time_ms}ms")
+                self.sync_time_changed.emit(time_ms)
+                
+                # Mostrar confirmación
+                minutes = time_ms // 60000
+                seconds = (time_ms % 60000) // 1000
+                self.offset_indicator.setText(f"⏱ Sincronizado a {minutes:02d}:{seconds:02d}")
+                self.offset_indicator.show()
+                self._indicator_timer.start(2000)
     
     # --- Detección de bordes para redimensionar ---
     
@@ -429,6 +573,11 @@ class LyricsOverlay(QWidget):
                 self._drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
                 self.setCursor(Qt.CursorShape.SizeAllCursor)
             
+            event.accept()
+        
+        elif event.button() == Qt.MouseButton.RightButton:
+            # Click derecho: mostrar diálogo de sincronización
+            self._show_sync_dialog()
             event.accept()
     
     def mouseMoveEvent(self, event: QMouseEvent) -> None:

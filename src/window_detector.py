@@ -345,6 +345,19 @@ class WindowTitleDetector:
         elapsed = datetime.now() - self._playback_start_time
         return self._paused_position_ms + int(elapsed.total_seconds() * 1000)
     
+    def set_position_ms(self, position_ms: int) -> None:
+        """
+        Establece manualmente la posición de reproducción.
+        
+        Útil cuando el usuario hace seek en Qobuz y quiere re-sincronizar.
+        
+        Args:
+            position_ms: Nueva posición en milisegundos.
+        """
+        self._paused_position_ms = position_ms
+        self._playback_start_time = datetime.now()
+        logger.info(f"Posición establecida manualmente: {position_ms}ms")
+    
     async def start_polling(self) -> None:
         """Inicia el loop de polling."""
         self._running = True

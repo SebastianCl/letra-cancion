@@ -99,6 +99,9 @@ class LetraCacionApp:
             self.tray.offset_decrease.connect(lambda: self._adjust_offset(-500))
             self.tray.quit_app.connect(self._quit)
             
+            # Conectar signal de sincronización manual del overlay
+            self.overlay.sync_time_changed.connect(self._on_sync_time_changed)
+            
             # 5. Inicializar hotkeys
             logger.info("Inicializando hotkeys...")
             self.hotkey_manager = HotkeyManager()
@@ -235,6 +238,12 @@ class LetraCacionApp:
             new_offset = self.sync_engine.adjust_offset(delta_ms)
             if self.overlay:
                 self.overlay.show_offset_indicator(new_offset)
+    
+    def _on_sync_time_changed(self, time_ms: int) -> None:
+        """Callback cuando el usuario establece manualmente el tiempo de sincronización."""
+        if self.detector:
+            self.detector.set_position_ms(time_ms)
+            logger.info(f"Sincronización manual establecida: {time_ms}ms")
     
     def _quit(self) -> None:
         """Cierra la aplicación."""
