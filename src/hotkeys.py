@@ -32,7 +32,6 @@ class HotkeyAction(Enum):
     OFFSET_INCREASE = "offset_increase"
     OFFSET_DECREASE = "offset_decrease"
     OFFSET_RESET = "offset_reset"
-    MOVE_OVERLAY = "move_overlay"
     QUIT_APP = "quit_app"
 
 
@@ -62,7 +61,6 @@ class HotkeyManager:
         HotkeyConfig(HotkeyAction.OFFSET_INCREASE, "ctrl+alt+up", "Aumentar offset (+500ms)"),
         HotkeyConfig(HotkeyAction.OFFSET_DECREASE, "ctrl+alt+down", "Disminuir offset (-500ms)"),
         HotkeyConfig(HotkeyAction.OFFSET_RESET, "ctrl+alt+r", "Resetear offset"),
-        HotkeyConfig(HotkeyAction.MOVE_OVERLAY, "ctrl+shift+m", "Mover overlay"),
         HotkeyConfig(HotkeyAction.QUIT_APP, "ctrl+shift+q", "Cerrar aplicación"),
     ]
     

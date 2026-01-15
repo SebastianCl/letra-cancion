@@ -16,6 +16,8 @@ from datetime import datetime
 from enum import Enum
 from typing import Callable, Optional
 
+from PyQt6.QtCore import QTimer
+
 from .lrc_parser import LyricsData, LyricLine
 from .window_detector import WindowTitleDetector, PlayerState, PlaybackInfo, TrackInfo
 
@@ -75,9 +77,10 @@ class SyncEngine:
         self._current_line_index: int = -1
         self._offset_ms: int = 0
         
-        # Control de loop
+        # Control de loop - usar QTimer para no bloquear con asyncio
         self._running: bool = False
-        self._update_interval: float = 0.05  # 50ms para suavidad
+        self._update_interval_ms: int = 50  # 50ms para suavidad
+        self._sync_timer: Optional[QTimer] = None
         
         # Callbacks
         self._on_sync_update: list[OnSyncUpdateCallback] = []
@@ -258,25 +261,36 @@ class SyncEngine:
     
     # --- Control del loop ---
     
-    async def start(self) -> None:
-        """Inicia el loop de sincronización."""
+    def start(self) -> None:
+        """Inicia el loop de sincronización usando QTimer (no bloquea durante arrastre de UI)."""
         if self._running:
             return
         
         self._running = True
-        logger.info("SyncEngine iniciado")
         
-        while self._running:
-            try:
-                self._update_sync()
-            except Exception as e:
-                logger.error(f"Error en loop de sincronización: {e}")
-            
-            await asyncio.sleep(self._update_interval)
+        # Crear QTimer para actualizaciones - esto funciona dentro del event loop de Qt
+        # y no se bloquea cuando se arrastra la ventana
+        self._sync_timer = QTimer()
+        self._sync_timer.timeout.connect(self._on_timer_tick)
+        self._sync_timer.start(self._update_interval_ms)
+        
+        logger.info("SyncEngine iniciado")
+    
+    def _on_timer_tick(self) -> None:
+        """Callback del timer - actualiza la sincronización."""
+        if not self._running:
+            return
+        try:
+            self._update_sync()
+        except Exception as e:
+            logger.error(f"Error en loop de sincronización: {e}")
     
     def stop(self) -> None:
         """Detiene el loop de sincronización."""
         self._running = False
+        if self._sync_timer:
+            self._sync_timer.stop()
+            self._sync_timer = None
         logger.info("SyncEngine detenido")
     
     @property

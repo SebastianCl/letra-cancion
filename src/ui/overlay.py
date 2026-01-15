@@ -105,7 +105,6 @@ class LyricsOverlay(QWidget):
         self._lyrics: Optional[LyricsData] = None
         self._current_line_index: int = -1
         self._drag_position: Optional[QPoint] = None
-        self._move_mode: bool = False
         
         self._setup_window()
         self._setup_ui()
@@ -117,18 +116,21 @@ class LyricsOverlay(QWidget):
     
     def _setup_window(self) -> None:
         """Configura las propiedades de la ventana."""
-        # Flags de ventana
+        # Flags de ventana - importante: WindowDoesNotAcceptFocus evita que tome el foco
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
             Qt.WindowType.WindowStaysOnTopHint |
-            Qt.WindowType.Tool  # No aparece en taskbar
+            Qt.WindowType.Tool |  # No aparece en taskbar
+            Qt.WindowType.WindowDoesNotAcceptFocus  # No tomar foco al interactuar
         )
         
         # Fondo transparente
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        # No tomar foco al mostrar (importante para no interrumpir la app de música)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         
-        # Tamaño
-        self.setFixedSize(self.config.width, self.config.height)
+        # Tamaño - usar resize en lugar de setFixedSize para evitar conflictos con Windows
+        self.resize(self.config.width, self.config.height)
         
         # Posición inicial (centrado en la parte inferior)
         screen = self.screen()
@@ -345,56 +347,28 @@ class LyricsOverlay(QWidget):
         """Oculta el indicador de offset."""
         self.offset_indicator.hide()
     
-    def set_move_mode(self, enabled: bool) -> None:
-        """
-        Activa/desactiva el modo de mover ventana.
-        
-        Args:
-            enabled: True para permitir arrastrar la ventana.
-        """
-        self._move_mode = enabled
-        
-        if enabled:
-            self.setCursor(Qt.CursorShape.SizeAllCursor)
-            self.container.setStyleSheet(f"""
-                QFrame#container {{
-                    background-color: rgba(26, 26, 46, {int(self.config.opacity * 255)});
-                    border-radius: 15px;
-                    border: 2px solid #00d4ff;
-                }}
-            """)
-        else:
-            self.unsetCursor()
-            self.container.setStyleSheet(f"""
-                QFrame#container {{
-                    background-color: rgba(26, 26, 46, {int(self.config.opacity * 255)});
-                    border-radius: 15px;
-                    border: 1px solid rgba(255, 255, 255, 0.1);
-                }}
-            """)
-    
-    # --- Eventos de mouse para arrastrar ---
+    # --- Eventos de mouse para arrastrar con click izquierdo ---
     
     def mousePressEvent(self, event: QMouseEvent) -> None:
         """Maneja el click del mouse."""
         if event.button() == Qt.MouseButton.LeftButton:
-            if self._move_mode:
-                self._drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-                event.accept()
+            # Click izquierdo: iniciar arrastre
+            self._drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            self.setCursor(Qt.CursorShape.SizeAllCursor)
+            event.accept()
     
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
         """Maneja el movimiento del mouse."""
-        if self._move_mode and self._drag_position is not None:
-            if event.buttons() == Qt.MouseButton.LeftButton:
-                self.move(event.globalPosition().toPoint() - self._drag_position)
-                event.accept()
+        if self._drag_position is not None and event.buttons() == Qt.MouseButton.LeftButton:
+            self.move(event.globalPosition().toPoint() - self._drag_position)
+            event.accept()
     
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         """Maneja cuando se suelta el mouse."""
         if event.button() == Qt.MouseButton.LeftButton:
             self._drag_position = None
-            if self._move_mode:
-                self.set_move_mode(False)
+            self.unsetCursor()
+            event.accept()
     
     def paintEvent(self, event: QPaintEvent) -> None:
         """Dibuja el fondo transparente."""

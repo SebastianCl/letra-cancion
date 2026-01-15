@@ -207,10 +207,6 @@ class LetraCacionApp:
                 
         elif action == HotkeyAction.OFFSET_RESET:
             self._reset_offset()
-            
-        elif action == HotkeyAction.MOVE_OVERLAY:
-            if self.overlay:
-                self.overlay.set_move_mode(True)
                 
         elif action == HotkeyAction.QUIT_APP:
             self._quit()
@@ -274,8 +270,8 @@ class LetraCacionApp:
         # Iniciar polling del detector de ventanas
         detector_task = asyncio.create_task(self.detector.start_polling())
         
-        # Iniciar motor de sincronización
-        sync_task = asyncio.create_task(self.sync_engine.start())
+        # Iniciar motor de sincronización (usa QTimer internamente, no async)
+        self.sync_engine.start()
         
         try:
             # El loop de Qt maneja los eventos
