@@ -17,6 +17,7 @@ import qasync
 
 from .window_detector import WindowTitleDetector, TrackInfo, PlaybackInfo, PlayerState
 from .lyrics_service import LyricsService, LyricsSearchResult
+from .translation_service import TranslationService
 from .sync_engine import SyncEngine, SyncState, SyncMode
 from .hotkeys import HotkeyManager, HotkeyAction
 from .ui.overlay import LyricsOverlay, OverlayConfig
@@ -43,6 +44,7 @@ class LetraCacionApp:
         # Componentes
         self.detector: Optional[WindowTitleDetector] = None
         self.lyrics_service: Optional[LyricsService] = None
+        self.translation_service: Optional[TranslationService] = None
         self.sync_engine: Optional[SyncEngine] = None
         self.hotkey_manager: Optional[HotkeyManager] = None
         self.overlay: Optional[LyricsOverlay] = None
@@ -51,6 +53,7 @@ class LetraCacionApp:
         # Estado
         self._current_track: Optional[TrackInfo] = None
         self._running: bool = False
+        self._translation_enabled: bool = True  # Traducción habilitada por defecto
         
         # Qt App
         self.app: Optional[QApplication] = None
@@ -81,6 +84,10 @@ class LetraCacionApp:
             logger.info("Inicializando servicio de letras...")
             self.lyrics_service = LyricsService()
             await self.lyrics_service.initialize()
+            
+            # 2.1 Inicializar servicio de traducción
+            logger.info("Inicializando servicio de traducción...")
+            self.translation_service = TranslationService()
             
             # 3. Crear motor de sincronización
             logger.info("Inicializando motor de sincronización...")
@@ -160,11 +167,27 @@ class LetraCacionApp:
             if result and result.lyrics_data.lines:
                 logger.info(f"Letras encontradas ({result.provider}): {len(result.lyrics_data.lines)} líneas")
                 
+                lyrics_data = result.lyrics_data
+                
+                # Traducir si está habilitado (en thread separado para no bloquear UI)
+                if self._translation_enabled and self.translation_service:
+                    try:
+                        logger.info("Traduciendo letras...")
+                        # Ejecutar traducción en thread pool para no bloquear
+                        lyrics_data = await asyncio.to_thread(
+                            self.translation_service.translate_lyrics,
+                            lyrics_data
+                        )
+                        translated_count = sum(1 for line in lyrics_data.lines if line.translation)
+                        logger.info(f"Traducción completada: {translated_count} líneas traducidas")
+                    except Exception as e:
+                        logger.warning(f"Error en traducción: {e}")
+                
                 # Cargar en el motor de sincronización
-                self.sync_engine.set_lyrics(result.lyrics_data, duration_ms or 0)
+                self.sync_engine.set_lyrics(lyrics_data, duration_ms or 0)
                 
                 # Actualizar overlay
-                self.overlay.set_lyrics(result.lyrics_data)
+                self.overlay.set_lyrics(lyrics_data)
                 
                 # Notificar
                 if not result.cached:
@@ -202,6 +225,9 @@ class LetraCacionApp:
         
         if action == HotkeyAction.TOGGLE_OVERLAY:
             self._toggle_overlay()
+        
+        elif action == HotkeyAction.TOGGLE_TRANSLATION:
+            self._toggle_translation()
             
         elif action == HotkeyAction.OFFSET_INCREASE:
             if self.sync_engine:
@@ -222,6 +248,13 @@ class LetraCacionApp:
             visible = self.overlay.toggle_visibility()
             self.tray.set_overlay_visible(visible)
             logger.info(f"Overlay {'visible' if visible else 'oculto'}")
+    
+    def _toggle_translation(self) -> None:
+        """Alterna la visibilidad de las traducciones."""
+        if self.overlay:
+            enabled = self.overlay.toggle_translation()
+            self._translation_enabled = enabled
+            logger.info(f"Traducción {'habilitada' if enabled else 'deshabilitada'}")
     
     def _reset_offset(self) -> None:
         """Resetea el offset de sincronización."""

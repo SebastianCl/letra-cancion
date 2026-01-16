@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 class OverlayConfig:
     """Configuración del overlay."""
     width: int = 600
-    height: int = 200
+    height: int = 280  # Más altura para traducciones
     opacity: float = 0.85
     font_size: int = 18
     font_family: str = "Segoe UI"
@@ -41,21 +41,68 @@ class OverlayConfig:
     text_color: str = "#ffffff"
     highlight_color: str = "#00d4ff"
     dim_color: str = "#666666"
-    lines_before: int = 2
-    lines_after: int = 2
+    lines_before: int = 1  # Reducido para dar espacio a traducciones
+    lines_after: int = 1   # Reducido para dar espacio a traducciones
     show_progress: bool = True
     show_sync_mode: bool = True
+    # Opciones de traducción
+    translation_enabled: bool = True
+    translation_font_size: int = 14
+    translation_color: str = "#aaaaaa"
 
 
-class LyricLabel(QLabel):
-    """Label personalizado para una línea de letra."""
+class LyricLabel(QWidget):
+    """Widget personalizado para una línea de letra con traducción opcional."""
     
-    def __init__(self, parent=None):
+    def __init__(self, config: OverlayConfig, parent=None):
         super().__init__(parent)
-        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setWordWrap(True)
+        self._config = config
         self._is_current = False
         self._opacity = 1.0
+        self._translation_visible = config.translation_enabled
+        
+        # Layout vertical para original + traducción
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 2, 0, 2)
+        layout.setSpacing(2)
+        
+        # Label para texto original
+        self._original_label = QLabel()
+        self._original_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._original_label.setWordWrap(True)
+        layout.addWidget(self._original_label)
+        
+        # Label para traducción
+        self._translation_label = QLabel()
+        self._translation_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._translation_label.setWordWrap(True)
+        self._translation_label.setStyleSheet(f"""
+            QLabel {{
+                color: {config.translation_color};
+                font-size: {config.translation_font_size}px;
+                font-style: italic;
+            }}
+        """)
+        layout.addWidget(self._translation_label)
+        
+        self._update_style()
+    
+    def setText(self, text: str) -> None:
+        """Establece el texto original."""
+        self._original_label.setText(text)
+    
+    def setTranslation(self, translation: str) -> None:
+        """Establece la traducción."""
+        if translation and self._translation_visible:
+            self._translation_label.setText(f"→ {translation}")
+            self._translation_label.show()
+        else:
+            self._translation_label.setText("")
+            self._translation_label.hide()
+    
+    def text(self) -> str:
+        """Retorna el texto original."""
+        return self._original_label.text()
     
     def set_current(self, is_current: bool) -> None:
         """Marca esta línea como actual o no."""
@@ -67,24 +114,50 @@ class LyricLabel(QLabel):
         self._opacity = 0.5 if is_dim else 1.0
         self._update_style()
     
+    def set_translation_visible(self, visible: bool) -> None:
+        """Muestra u oculta la traducción."""
+        self._translation_visible = visible
+        if not visible:
+            self._translation_label.hide()
+        elif self._translation_label.text():
+            self._translation_label.show()
+    
     def _update_style(self) -> None:
         """Actualiza el estilo visual."""
         if self._is_current:
-            self.setStyleSheet(f"""
+            self._original_label.setStyleSheet(f"""
                 QLabel {{
                     color: #00d4ff;
                     font-weight: bold;
                     font-size: 20px;
                 }}
             """)
+            # Traducción más visible cuando es línea actual
+            if self._translation_visible:
+                self._translation_label.setStyleSheet(f"""
+                    QLabel {{
+                        color: #88ccff;
+                        font-size: {self._config.translation_font_size}px;
+                        font-style: italic;
+                    }}
+                """)
         else:
-            self.setStyleSheet(f"""
+            self._original_label.setStyleSheet(f"""
                 QLabel {{
                     color: rgba(255, 255, 255, {self._opacity});
                     font-weight: normal;
                     font-size: 16px;
                 }}
             """)
+            # Traducción atenuada para líneas de contexto
+            if self._translation_visible:
+                self._translation_label.setStyleSheet(f"""
+                    QLabel {{
+                        color: rgba(170, 170, 170, {self._opacity * 0.7});
+                        font-size: {self._config.translation_font_size}px;
+                        font-style: italic;
+                    }}
+                """)
 
 
 class SyncTimeDialog(QDialog):
@@ -344,8 +417,7 @@ class LyricsOverlay(QWidget):
         self.line_labels: list[LyricLabel] = []
         
         for i in range(total_lines):
-            label = LyricLabel()
-            label.setFont(QFont(self.config.font_family, self.config.font_size))
+            label = LyricLabel(self.config)
             self.line_labels.append(label)
             lyrics_layout.addWidget(label)
         
@@ -470,6 +542,7 @@ class LyricsOverlay(QWidget):
         # Limpiar todas las líneas
         for label in self.line_labels:
             label.setText("")
+            label.setTranslation("")
             label.set_current(False)
             label.set_dim(False)
         
@@ -482,6 +555,9 @@ class LyricsOverlay(QWidget):
             if 0 <= label_idx < len(self.line_labels):
                 label = self.line_labels[label_idx]
                 label.setText(line.text)
+                # Pasar traducción si existe
+                if hasattr(line, 'translation') and line.translation:
+                    label.setTranslation(line.translation)
                 label.set_current(relative_idx == 0)
                 label.set_dim(relative_idx != 0)
         
@@ -492,6 +568,9 @@ class LyricsOverlay(QWidget):
         
         if self.config.show_sync_mode:
             mode_text = "⏱ Sync" if state.mode == SyncMode.SYNCED else "📜 Estimado"
+            # Añadir indicador de traducción si está habilitada
+            if self.config.translation_enabled:
+                mode_text += " 🌐"
             self.sync_indicator.setText(mode_text)
     
     def show_offset_indicator(self, offset_ms: int) -> None:
@@ -691,6 +770,28 @@ class LyricsOverlay(QWidget):
         else:
             self.show()
             return True
+    
+    def toggle_translation(self) -> bool:
+        """
+        Alterna la visibilidad de las traducciones.
+        
+        Returns:
+            True si las traducciones están visibles, False si están ocultas.
+        """
+        self.config.translation_enabled = not self.config.translation_enabled
+        
+        # Actualizar todos los labels
+        for label in self.line_labels:
+            label.set_translation_visible(self.config.translation_enabled)
+        
+        # Mostrar indicador temporal
+        status = "🌐 Traducción ON" if self.config.translation_enabled else "🌐 Traducción OFF"
+        self.offset_indicator.setText(status)
+        self.offset_indicator.show()
+        self._indicator_timer.start(2000)
+        
+        logger.info(f"Traducción {'habilitada' if self.config.translation_enabled else 'deshabilitada'}")
+        return self.config.translation_enabled
     
     def set_no_lyrics_available(self) -> None:
         """Muestra mensaje de que no hay letras disponibles."""

@@ -14,7 +14,7 @@ Tags de metadatos (opcionales):
 """
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 
@@ -23,6 +23,7 @@ class LyricLine:
     """Representa una línea de letra con su timestamp."""
     timestamp_ms: int  # Tiempo en milisegundos
     text: str
+    translation: Optional[str] = field(default=None)  # Traducción opcional
     
     @property
     def timestamp_seconds(self) -> float:
