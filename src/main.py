@@ -135,6 +135,11 @@ class LetraCacionApp:
         
         logger.info(f"Nueva canción: {track}")
         
+        # IMPORTANTE: Limpiar letras anteriores inmediatamente para evitar
+        # mostrar letras de la canción anterior mientras se buscan las nuevas
+        self.sync_engine.clear_lyrics()
+        self.overlay.set_lyrics(None)
+        
         # Actualizar UI inmediatamente
         self.tray.update_track_info(track.artist, track.title)
         self.overlay.set_track_info(track.artist, track.title)
@@ -159,8 +164,8 @@ class LetraCacionApp:
                 duration_ms=duration_ms
             )
             
-            # Verificar que siga siendo el mismo track
-            if self._current_track != track:
+            # Verificar que siga siendo el mismo track (usar matches() para comparar por contenido)
+            if self._current_track is None or not self._current_track.matches(track):
                 logger.debug("Track cambió durante búsqueda, descartando resultado")
                 return
             
@@ -182,6 +187,11 @@ class LetraCacionApp:
                         logger.info(f"Traducción completada: {translated_count} líneas traducidas")
                     except Exception as e:
                         logger.warning(f"Error en traducción: {e}")
+                
+                # Verificar OTRA VEZ después de la traducción (puede tardar varios segundos)
+                if self._current_track is None or not self._current_track.matches(track):
+                    logger.debug("Track cambió durante traducción, descartando resultado")
+                    return
                 
                 # Cargar en el motor de sincronización
                 self.sync_engine.set_lyrics(lyrics_data, duration_ms or 0)
