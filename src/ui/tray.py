@@ -222,7 +222,6 @@ class TrayIcon(QObject):
             visible: True si el overlay está visible
         """
         self._overlay_visible = visible
-        
         if self._toggle_action:
             if visible:
                 self._toggle_action.setText("👁 Ocultar letras")

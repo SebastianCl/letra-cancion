@@ -360,6 +360,12 @@ class LyricsOverlay(QWidget):
         self._manual_scroll_mode: bool = False
         self._manual_line_index: int = 0
         
+        # Estado de maximización
+        self._is_maximized: bool = False
+        self._normal_size: Optional[QSize] = None  # Tamaño normal antes de maximizar
+        self._max_width: int = 1000  # Ancho máximo
+        self._max_height: int = 600  # Alto máximo
+        
         # Control de líneas dinámicas
         self._last_calculated_lines: int = 0  # Último número de líneas calculado
         self._pending_sync_state: Optional[SyncState] = None  # Estado pendiente de aplicar
@@ -457,6 +463,27 @@ class LyricsOverlay(QWidget):
         """)
         self.min_btn.clicked.connect(self.toggle_visibility)
         close_btn_layout.addWidget(self.min_btn)
+
+        # Botón de maximizar
+        self.max_btn = QPushButton("⬜")
+        self.max_btn.setFixedSize(24, 24)
+        self.max_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.max_btn.setStyleSheet("""
+            QPushButton {
+                background-color: transparent;
+                color: rgba(255, 255, 255, 0.5);
+                border: none;
+                font-size: 12px;
+                font-weight: bold;
+                border-radius: 12px;
+            }
+            QPushButton:hover {
+                background-color: rgba(100, 255, 100, 0.2);
+                color: #00ff00;
+            }
+        """)
+        self.max_btn.clicked.connect(self._on_maximize_clicked)
+        close_btn_layout.addWidget(self.max_btn)
 
         # Botón de cerrar
         self.close_btn = QPushButton("✕")
@@ -835,6 +862,21 @@ class LyricsOverlay(QWidget):
         """Maneja el click en el botón de cerrar."""
         logger.info("Botón cerrar presionado")
         self.quit_requested.emit()
+    
+    def _on_maximize_clicked(self) -> None:
+        """Maneja el click en el botón de maximizar."""
+        if self._is_maximized:
+            # Restaurar tamaño normal
+            if self._normal_size:
+                self.resize(self._normal_size)
+            self._is_maximized = False
+            logger.info("Overlay restaurado a tamaño normal")
+        else:
+            # Maximizar a tamaño máximo
+            self._normal_size = self.size()  # Guardar tamaño actual
+            self.resize(self._max_width, self._max_height)
+            self._is_maximized = True
+            logger.info(f"Overlay maximizado a {self._max_width}x{self._max_height}")
     
     def _show_sync_dialog(self) -> None:
         """Muestra el diálogo para establecer el tiempo de sincronización."""
