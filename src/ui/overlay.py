@@ -523,11 +523,23 @@ class LyricsOverlay(QWidget):
             }
         """)
         footer_layout.addWidget(self.progress_label)
-        
+
+        # Tiempo actual (parte inferior derecha)
+        self.time_label = QLabel()
+        self.time_label.setStyleSheet("""
+            QLabel {
+                color: #cccccc;
+                font-size: 12px;
+                padding-right: 8px;
+            }
+        """)
+        self.time_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        footer_layout.addWidget(self.time_label)
+
         container_layout.addLayout(footer_layout)
-        
+
         main_layout.addWidget(self.container)
-        
+
         # Mensaje inicial
         self._show_message("🎵 Esperando música...")
     
@@ -760,7 +772,12 @@ class LyricsOverlay(QWidget):
         if self.config.show_progress:
             current, total = state.current_line_index + 1, len(self._lyrics.lines)
             self.progress_label.setText(f"{current}/{total}")
-        
+
+        # Actualizar tiempo actual en la parte inferior derecha
+        minutes = state.position_ms // 60000
+        seconds = (state.position_ms % 60000) // 1000
+        self.time_label.setText(f"{minutes:02d}:{seconds:02d}")
+
         if self.config.show_sync_mode:
             mode_text = "⏱ Sync" if state.mode == SyncMode.SYNCED else "📜 Estimado"
             # Añadir indicador de traducción si está habilitada
@@ -1035,11 +1052,12 @@ class LyricsOverlay(QWidget):
         self.progress_label.setText(f"{current}/{total}")
         self.sync_indicator.setText("📜 Manual (scroll)")
         
-        # Mostrar tiempo de la línea actual
+        # Mostrar tiempo de la línea actual en el label de tiempo
         current_line = self._lyrics.lines[self._manual_line_index]
         time_sec = current_line.timestamp_ms // 1000
         minutes = time_sec // 60
         seconds = time_sec % 60
+        self.time_label.setText(f"{minutes:02d}:{seconds:02d}")
         self.offset_indicator.setText(f"⏱ {minutes:02d}:{seconds:02d}")
         self.offset_indicator.show()
     
