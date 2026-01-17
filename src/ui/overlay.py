@@ -397,7 +397,9 @@ class LyricsOverlay(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         # No tomar foco al mostrar (importante para no interrumpir la app de música)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
-        
+        # Deshabilitar el escalado automático de DPI para mantener tamaño físico
+        if hasattr(Qt.WidgetAttribute, 'WA_ForceDisabledDpiScaling'):
+            self.setAttribute(Qt.WidgetAttribute.WA_ForceDisabledDpiScaling)
         # Tamaño - usar resize en lugar de setFixedSize para evitar conflictos con Windows
         self.resize(self.config.width, self.config.height)
         
