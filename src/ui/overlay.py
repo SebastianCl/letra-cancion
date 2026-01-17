@@ -679,7 +679,7 @@ class LyricsOverlay(QWidget):
     
     def mousePressEvent(self, event: QMouseEvent) -> None:
         """Maneja el click del mouse."""
-        if event.button() == Qt.MouseButton.LeftButton:
+        if event.button() == Qt.MouseButton.MiddleButton:
             pos = event.position().toPoint()
             edge = self._get_edge_at_pos(pos)
             
@@ -707,7 +707,7 @@ class LyricsOverlay(QWidget):
     
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
         """Maneja el movimiento del mouse."""
-        if event.buttons() == Qt.MouseButton.LeftButton:
+        if event.buttons() == Qt.MouseButton.MiddleButton:
             if self._resize_edge and self._resize_start_rect:
                 # Redimensionando
                 self._do_resize(event.globalPosition().toPoint())
@@ -753,7 +753,7 @@ class LyricsOverlay(QWidget):
     
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         """Maneja cuando se suelta el mouse."""
-        if event.button() == Qt.MouseButton.LeftButton:
+        if event.button() == Qt.MouseButton.MiddleButton:
             self._drag_position = None
             self._resize_edge = None
             self._resize_start_rect = None
