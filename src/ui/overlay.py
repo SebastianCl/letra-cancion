@@ -54,12 +54,21 @@ class OverlayConfig:
 class LyricLabel(QWidget):
     """Widget personalizado para una línea de letra con traducción opcional."""
     
+    # Señal emitida cuando se hace clic en la línea (índice real, timestamp_ms)
+    line_clicked = pyqtSignal(int, int)
+    
     def __init__(self, config: OverlayConfig, parent=None):
         super().__init__(parent)
         self._config = config
         self._is_current = False
         self._opacity = 1.0
         self._translation_visible = config.translation_enabled
+        self._real_line_index: int = -1  # Índice real en la lista de líneas
+        self._timestamp_ms: int = 0  # Timestamp de la línea
+        
+        # Habilitar hover
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
         
         # Layout vertical para original + traducción
         layout = QVBoxLayout(self)
@@ -121,6 +130,40 @@ class LyricLabel(QWidget):
             self._translation_label.hide()
         elif self._translation_label.text():
             self._translation_label.show()
+    
+    def set_line_info(self, index: int, timestamp_ms: int) -> None:
+        """Establece la información de la línea para sincronización."""
+        self._real_line_index = index
+        self._timestamp_ms = timestamp_ms
+    
+    def clear_line_info(self) -> None:
+        """Limpia la información de la línea."""
+        self._real_line_index = -1
+        self._timestamp_ms = 0
+    
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        """Maneja el clic del mouse para sincronizar."""
+        if event.button() == Qt.MouseButton.LeftButton:
+            if self._real_line_index >= 0 and self.text():
+                self.line_clicked.emit(self._real_line_index, self._timestamp_ms)
+                event.accept()
+                return
+        # Propagar el evento al padre
+        event.ignore()
+    
+    def enterEvent(self, event) -> None:
+        """Resalta la línea al pasar el mouse."""
+        if self.text() and self._real_line_index >= 0:
+            self._original_label.setStyleSheet(
+                self._original_label.styleSheet() + 
+                "background-color: rgba(0, 212, 255, 0.1); border-radius: 4px;"
+            )
+        super().enterEvent(event)
+    
+    def leaveEvent(self, event) -> None:
+        """Quita el resaltado al salir el mouse."""
+        self._update_style()
+        super().leaveEvent(event)
     
     def _update_style(self) -> None:
         """Actualiza el estilo visual."""
@@ -427,6 +470,8 @@ class LyricsOverlay(QWidget):
         
         for i in range(total_lines):
             label = LyricLabel(self.config)
+            # Conectar señal de clic para sincronización
+            label.line_clicked.connect(self._on_line_clicked)
             self.line_labels.append(label)
             lyrics_layout.addWidget(label)
         
@@ -558,6 +603,7 @@ class LyricsOverlay(QWidget):
             label.setTranslation("")
             label.set_current(False)
             label.set_dim(False)
+            label.clear_line_info()
         
         # Mapear contexto a labels
         center_idx = self.config.lines_before
@@ -568,6 +614,9 @@ class LyricsOverlay(QWidget):
             if 0 <= label_idx < len(self.line_labels):
                 label = self.line_labels[label_idx]
                 label.setText(line.text)
+                # Establecer información de la línea para sincronización por clic
+                real_index = state.current_line_index + relative_idx
+                label.set_line_info(real_index, line.timestamp_ms)
                 # Pasar traducción si existe
                 if hasattr(line, 'translation') and line.translation:
                     label.setTranslation(line.translation)
@@ -815,6 +864,7 @@ class LyricsOverlay(QWidget):
             label.setTranslation("")
             label.set_current(False)
             label.set_dim(False)
+            label.clear_line_info()
         
         # Mapear contexto a labels
         center_idx = self.config.lines_before
@@ -825,6 +875,9 @@ class LyricsOverlay(QWidget):
             if 0 <= label_idx < len(self.line_labels):
                 label = self.line_labels[label_idx]
                 label.setText(line.text)
+                # Establecer información de la línea para sincronización por clic
+                real_index = self._manual_line_index + relative_idx
+                label.set_line_info(real_index, line.timestamp_ms)
                 if hasattr(line, 'translation') and line.translation:
                     label.setTranslation(line.translation)
                 label.set_current(relative_idx == 0)
@@ -849,6 +902,32 @@ class LyricsOverlay(QWidget):
         self._manual_scroll_mode = False
         self.offset_indicator.hide()
         logger.info("Volviendo a modo sincronizado automáticamente")
+    
+    def _on_line_clicked(self, line_index: int, timestamp_ms: int) -> None:
+        """
+        Maneja el clic en una línea para sincronizar la reproducción.
+        
+        Args:
+            line_index: Índice de la línea en la lista de letras.
+            timestamp_ms: Timestamp de la línea en milisegundos.
+        """
+        if self._lyrics is None:
+            return
+        
+        # Salir del modo scroll manual si estamos en él
+        self._manual_scroll_mode = False
+        self._manual_scroll_timer.stop()
+        
+        # Emitir señal para sincronizar la reproducción
+        logger.info(f"Clic en línea {line_index}: sincronizando a {timestamp_ms}ms")
+        self.sync_time_changed.emit(timestamp_ms)
+        
+        # Mostrar confirmación visual
+        minutes = timestamp_ms // 60000
+        seconds = (timestamp_ms % 60000) // 1000
+        self.offset_indicator.setText(f"🎯 Sincronizado a {minutes:02d}:{seconds:02d}")
+        self.offset_indicator.show()
+        self._indicator_timer.start(2000)
     
     def paintEvent(self, event: QPaintEvent) -> None:
         """Dibuja el fondo transparente."""
