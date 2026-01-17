@@ -20,7 +20,7 @@ from PyQt6.QtCore import (
 )
 from PyQt6.QtGui import (
     QFont, QColor, QPalette, QMouseEvent, QPainter, QBrush,
-    QPaintEvent, QFontMetrics
+    QPaintEvent, QFontMetrics, QWheelEvent
 )
 
 from ..lrc_parser import LyricLine, LyricsData
@@ -308,6 +308,10 @@ class LyricsOverlay(QWidget):
         self._resize_edge: Optional[str] = None  # Para redimensionar desde esquinas
         self._resize_start_rect: Optional[tuple] = None
         
+        # Estado de scroll manual
+        self._manual_scroll_mode: bool = False
+        self._manual_line_index: int = 0
+        
         self._setup_window()
         self._setup_ui()
         
@@ -315,6 +319,11 @@ class LyricsOverlay(QWidget):
         self._indicator_timer = QTimer()
         self._indicator_timer.timeout.connect(self._hide_indicator)
         self._indicator_timer.setSingleShot(True)
+        
+        # Timer para volver al modo sincronizado automáticamente
+        self._manual_scroll_timer = QTimer()
+        self._manual_scroll_timer.timeout.connect(self._exit_manual_scroll_mode)
+        self._manual_scroll_timer.setSingleShot(True)
         
         # Habilitar tracking del mouse para cambiar cursor en bordes
         self.setMouseTracking(True)
@@ -531,6 +540,10 @@ class LyricsOverlay(QWidget):
         
         self._current_line_index = state.current_line_index
         self._current_position_ms = state.position_ms  # Guardar posición actual
+        
+        # Si estamos en modo scroll manual, no actualizar automáticamente
+        if self._manual_scroll_mode:
+            return
         
         # Obtener líneas de contexto
         context = self._lyrics.get_context_lines(
@@ -749,6 +762,93 @@ class LyricsOverlay(QWidget):
             edge = self._get_edge_at_pos(event.position().toPoint())
             self._update_cursor_for_edge(edge)
             event.accept()
+    
+    def wheelEvent(self, event: QWheelEvent) -> None:
+        """Maneja el scroll de la rueda del mouse para navegar por las letras."""
+        if self._lyrics is None or not self._lyrics.lines:
+            event.ignore()
+            return
+        
+        # Determinar dirección del scroll
+        delta = event.angleDelta().y()
+        
+        if delta == 0:
+            event.ignore()
+            return
+        
+        # Activar modo scroll manual
+        if not self._manual_scroll_mode:
+            self._manual_scroll_mode = True
+            self._manual_line_index = self._current_line_index
+        
+        # Navegar entre líneas
+        if delta > 0:
+            # Scroll arriba = línea anterior
+            self._manual_line_index = max(0, self._manual_line_index - 1)
+        else:
+            # Scroll abajo = línea siguiente
+            self._manual_line_index = min(len(self._lyrics.lines) - 1, self._manual_line_index + 1)
+        
+        # Actualizar visualización con la línea manual
+        self._update_manual_display()
+        
+        # Reiniciar timer para volver a modo sincronizado (5 segundos)
+        self._manual_scroll_timer.start(5000)
+        
+        event.accept()
+    
+    def _update_manual_display(self) -> None:
+        """Actualiza la visualización en modo scroll manual."""
+        if self._lyrics is None:
+            return
+        
+        # Obtener líneas de contexto para la línea manual
+        context = self._lyrics.get_context_lines(
+            self._manual_line_index,
+            before=self.config.lines_before,
+            after=self.config.lines_after
+        )
+        
+        # Limpiar todas las líneas
+        for label in self.line_labels:
+            label.setText("")
+            label.setTranslation("")
+            label.set_current(False)
+            label.set_dim(False)
+        
+        # Mapear contexto a labels
+        center_idx = self.config.lines_before
+        
+        for relative_idx, line in context:
+            label_idx = center_idx + relative_idx
+            
+            if 0 <= label_idx < len(self.line_labels):
+                label = self.line_labels[label_idx]
+                label.setText(line.text)
+                if hasattr(line, 'translation') and line.translation:
+                    label.setTranslation(line.translation)
+                label.set_current(relative_idx == 0)
+                label.set_dim(relative_idx != 0)
+        
+        # Mostrar indicador de modo manual
+        current = self._manual_line_index + 1
+        total = len(self._lyrics.lines)
+        self.progress_label.setText(f"{current}/{total}")
+        self.sync_indicator.setText("📜 Manual (scroll)")
+        
+        # Mostrar tiempo de la línea actual
+        current_line = self._lyrics.lines[self._manual_line_index]
+        time_sec = current_line.timestamp_ms // 1000
+        minutes = time_sec // 60
+        seconds = time_sec % 60
+        self.offset_indicator.setText(f"⏱ {minutes:02d}:{seconds:02d}")
+        self.offset_indicator.show()
+    
+    def _exit_manual_scroll_mode(self) -> None:
+        """Sale del modo scroll manual y vuelve a sincronización automática."""
+        self._manual_scroll_mode = False
+        self.offset_indicator.hide()
+        logger.info("Volviendo a modo sincronizado automáticamente")
     
     def paintEvent(self, event: QPaintEvent) -> None:
         """Dibuja el fondo transparente."""
