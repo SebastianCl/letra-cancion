@@ -680,29 +680,38 @@ class LyricsOverlay(QWidget):
     
     def set_lyrics(self, lyrics: Optional[LyricsData]) -> None:
         """
-        Establece las letras a mostrar.
-        
+        Establece las letras a mostrar y actualiza la vista inmediatamente.
+        Elimina cualquier mensaje de estado y muestra la letra aunque la canción esté en introducción instrumental.
         Args:
             lyrics: Datos de letras o None para limpiar.
         """
         self._lyrics = lyrics
         self._current_line_index = -1
-        
+
+        # Si no hay letras, mostrar mensaje de espera
         if lyrics is None or not lyrics.lines:
             self._show_message("🎵 Esperando música...")
             return
-        
+
         # Mostrar todas las líneas
         for label in self.line_labels:
             label.show()
-        
+
         # Actualizar header con info de la canción
         if lyrics.title and lyrics.artist:
             self.header.setText(f"♪ {lyrics.artist} - {lyrics.title}")
             self.header.show()
         else:
             self.header.hide()
-        
+
+        # Eliminar cualquier mensaje de estado (como 'Buscando letra')
+        self.progress_label.setText("")
+        self.sync_indicator.setText("")
+
+        # Refrescar la visualización para mostrar la letra desde el inicio
+        self._current_line_index = 0
+        self._refresh_current_display()
+
         logger.info(f"Letras cargadas: {len(lyrics.lines)} líneas")
     
     def update_sync(self, state: SyncState) -> None:
