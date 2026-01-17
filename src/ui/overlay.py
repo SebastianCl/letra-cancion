@@ -41,14 +41,19 @@ class OverlayConfig:
     text_color: str = "#ffffff"
     highlight_color: str = "#00d4ff"
     dim_color: str = "#666666"
-    lines_before: int = 1  # Reducido para dar espacio a traducciones
-    lines_after: int = 1   # Reducido para dar espacio a traducciones
+    lines_before: int = 1  # Valor inicial, se recalcula dinámicamente
+    lines_after: int = 1   # Valor inicial, se recalcula dinámicamente
     show_progress: bool = True
     show_sync_mode: bool = True
     # Opciones de traducción
     translation_enabled: bool = True
     translation_font_size: int = 14
     translation_color: str = "#aaaaaa"
+    # Configuración para cálculo dinámico de líneas
+    line_height_without_translation: int = 36  # Altura estimada por línea sin traducción
+    line_height_with_translation: int = 56     # Altura estimada por línea con traducción
+    min_visible_lines: int = 3                  # Mínimo de líneas visibles
+    header_footer_height: int = 80              # Espacio reservado para header y footer
 
 
 class LyricLabel(QWidget):
@@ -355,6 +360,10 @@ class LyricsOverlay(QWidget):
         self._manual_scroll_mode: bool = False
         self._manual_line_index: int = 0
         
+        # Control de líneas dinámicas
+        self._last_calculated_lines: int = 0  # Último número de líneas calculado
+        self._pending_sync_state: Optional[SyncState] = None  # Estado pendiente de aplicar
+        
         self._setup_window()
         self._setup_ui()
         
@@ -370,6 +379,9 @@ class LyricsOverlay(QWidget):
         
         # Habilitar tracking del mouse para cambiar cursor en bordes
         self.setMouseTracking(True)
+        
+        # Calcular líneas iniciales basado en el tamaño de la ventana
+        self._recalculate_visible_lines()
     
     def _setup_window(self) -> None:
         """Configura las propiedades de la ventana."""
@@ -460,22 +472,17 @@ class LyricsOverlay(QWidget):
         
         # Área de letras
         self.lyrics_container = QWidget()
-        lyrics_layout = QVBoxLayout(self.lyrics_container)
-        lyrics_layout.setContentsMargins(0, 0, 0, 0)
-        lyrics_layout.setSpacing(4)
+        self.lyrics_layout = QVBoxLayout(self.lyrics_container)
+        self.lyrics_layout.setContentsMargins(0, 0, 0, 0)
+        self.lyrics_layout.setSpacing(4)
         
-        # Crear labels para las líneas
-        total_lines = self.config.lines_before + 1 + self.config.lines_after
+        # Lista de labels para las líneas (se crean dinámicamente)
         self.line_labels: list[LyricLabel] = []
         
-        for i in range(total_lines):
-            label = LyricLabel(self.config)
-            # Conectar señal de clic para sincronización
-            label.line_clicked.connect(self._on_line_clicked)
-            self.line_labels.append(label)
-            lyrics_layout.addWidget(label)
+        # Crear labels iniciales
+        self._create_line_labels()
         
-        container_layout.addWidget(self.lyrics_container)
+        container_layout.addWidget(self.lyrics_container, 1)  # stretch=1 para que ocupe espacio disponible
         
         # Footer con progreso e indicadores
         footer_layout = QHBoxLayout()
@@ -523,6 +530,119 @@ class LyricsOverlay(QWidget):
         
         # Mensaje inicial
         self._show_message("🎵 Esperando música...")
+    
+    def _calculate_visible_lines(self) -> int:
+        """
+        Calcula el número de líneas visibles según el alto de la ventana.
+        
+        Returns:
+            Número total de líneas que caben en la ventana.
+        """
+        available_height = self.height() - self.config.header_footer_height
+        
+        # Elegir altura de línea según si hay traducciones
+        if self.config.translation_enabled:
+            line_height = self.config.line_height_with_translation
+        else:
+            line_height = self.config.line_height_without_translation
+        
+        # Calcular cuántas líneas caben
+        num_lines = max(self.config.min_visible_lines, available_height // line_height)
+        
+        # Asegurar número impar para tener una línea central
+        if num_lines % 2 == 0:
+            num_lines -= 1
+        
+        return max(self.config.min_visible_lines, num_lines)
+    
+    def _recalculate_visible_lines(self) -> None:
+        """
+        Recalcula y actualiza el número de líneas visibles según el tamaño de la ventana.
+        Recrea los labels si es necesario.
+        """
+        new_total_lines = self._calculate_visible_lines()
+        
+        if new_total_lines != self._last_calculated_lines:
+            self._last_calculated_lines = new_total_lines
+            
+            # Calcular lines_before y lines_after (distribución simétrica)
+            context_lines = (new_total_lines - 1) // 2
+            self.config.lines_before = context_lines
+            self.config.lines_after = context_lines
+            
+            logger.debug(f"Recalculando líneas visibles: {new_total_lines} total "
+                        f"({context_lines} antes, 1 actual, {context_lines} después)")
+            
+            # Recrear los labels
+            self._create_line_labels()
+            
+            # Re-aplicar estado si tenemos letras cargadas
+            if self._lyrics is not None:
+                if self._manual_scroll_mode:
+                    self._update_manual_display()
+                elif self._pending_sync_state is not None:
+                    self._apply_sync_state(self._pending_sync_state)
+                elif self._current_line_index >= 0:
+                    # Crear un estado temporal para refrescar
+                    self._refresh_current_display()
+    
+    def _create_line_labels(self) -> None:
+        """
+        Crea o recrea los labels de líneas según la configuración actual.
+        """
+        # Limpiar labels existentes
+        for label in self.line_labels:
+            label.line_clicked.disconnect(self._on_line_clicked)
+            self.lyrics_layout.removeWidget(label)
+            label.deleteLater()
+        self.line_labels.clear()
+        
+        # Crear nuevos labels
+        total_lines = self.config.lines_before + 1 + self.config.lines_after
+        
+        for i in range(total_lines):
+            label = LyricLabel(self.config)
+            label.line_clicked.connect(self._on_line_clicked)
+            self.line_labels.append(label)
+            self.lyrics_layout.addWidget(label)
+        
+        logger.debug(f"Creados {total_lines} labels de línea")
+    
+    def _refresh_current_display(self) -> None:
+        """
+        Refresca la visualización actual sin estado de sincronización.
+        """
+        if self._lyrics is None or self._current_line_index < 0:
+            return
+        
+        context = self._lyrics.get_context_lines(
+            self._current_line_index,
+            before=self.config.lines_before,
+            after=self.config.lines_after
+        )
+        
+        # Limpiar todas las líneas
+        for label in self.line_labels:
+            label.setText("")
+            label.setTranslation("")
+            label.set_current(False)
+            label.set_dim(False)
+            label.clear_line_info()
+        
+        center_idx = self.config.lines_before
+        
+        for relative_idx, line in context:
+            label_idx = center_idx + relative_idx
+            
+            if 0 <= label_idx < len(self.line_labels):
+                label = self.line_labels[label_idx]
+                label.setText(line.text)
+                real_index = self._current_line_index + relative_idx
+                label.set_line_info(real_index, line.timestamp_ms)
+                if hasattr(line, 'translation') and line.translation:
+                    label.setTranslation(line.translation)
+                label.set_current(relative_idx == 0)
+                label.set_dim(relative_idx != 0)
     
     def _show_message(self, message: str) -> None:
         """Muestra un mensaje centrado."""
@@ -585,9 +705,22 @@ class LyricsOverlay(QWidget):
         
         self._current_line_index = state.current_line_index
         self._current_position_ms = state.position_ms  # Guardar posición actual
+        self._pending_sync_state = state  # Guardar para posible re-aplicación
         
         # Si estamos en modo scroll manual, no actualizar automáticamente
         if self._manual_scroll_mode:
+            return
+        
+        self._apply_sync_state(state)
+    
+    def _apply_sync_state(self, state: SyncState) -> None:
+        """
+        Aplica el estado de sincronización a la visualización.
+        
+        Args:
+            state: Estado de sincronización a aplicar.
+        """
+        if self._lyrics is None or not self._lyrics.lines:
             return
         
         # Obtener líneas de contexto
@@ -799,6 +932,19 @@ class LyricsOverlay(QWidget):
             new_y = y + h - new_h
         
         self.setGeometry(new_x, new_y, new_w, new_h)
+        
+        # Recalcular líneas visibles después de redimensionar
+        self._recalculate_visible_lines()
+    
+    def resizeEvent(self, event) -> None:
+        """
+        Maneja el evento de redimensionamiento de la ventana.
+        Recalcula el número de líneas visibles dinámicamente.
+        """
+        super().resizeEvent(event)
+        
+        # Recalcular líneas visibles cuando cambia el tamaño
+        self._recalculate_visible_lines()
     
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         """Maneja cuando se suelta el mouse."""
@@ -962,6 +1108,9 @@ class LyricsOverlay(QWidget):
         # Actualizar todos los labels
         for label in self.line_labels:
             label.set_translation_visible(self.config.translation_enabled)
+        
+        # Recalcular líneas visibles (cambia la altura por línea)
+        self._recalculate_visible_lines()
         
         # Mostrar indicador temporal
         status = "🌐 Traducción ON" if self.config.translation_enabled else "🌐 Traducción OFF"
