@@ -437,6 +437,28 @@ class LyricsOverlay(QWidget):
         close_btn_layout.setContentsMargins(0, 0, 0, 0)
         close_btn_layout.addStretch()  # Empuja el botón a la derecha
         
+        # Botón de minimizar
+        self.min_btn = QPushButton("–")
+        self.min_btn.setFixedSize(24, 24)
+        self.min_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.min_btn.setStyleSheet("""
+            QPushButton {
+                background-color: transparent;
+                color: rgba(255, 255, 255, 0.5);
+                border: none;
+                font-size: 16px;
+                font-weight: bold;
+                border-radius: 12px;
+            }
+            QPushButton:hover {
+                background-color: rgba(100, 200, 255, 0.2);
+                color: #00d4ff;
+            }
+        """)
+        self.min_btn.clicked.connect(self.toggle_visibility)
+        close_btn_layout.addWidget(self.min_btn)
+
+        # Botón de cerrar
         self.close_btn = QPushButton("✕")
         self.close_btn.setFixedSize(24, 24)
         self.close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
