@@ -34,7 +34,8 @@ class OverlayConfig:
     """Configuración del overlay."""
     width: int = 600
     height: int = 280  # Más altura para traducciones
-    opacity: float = 0.85
+    # Opacidad del fondo del contenedor (0.0-1.0). Valores altos mejoran legibilidad.
+    opacity: float = 0.97
     font_size: int = 18
     font_family: str = "Segoe UI"
     bg_color: str = "#1a1a2e"
@@ -125,7 +126,8 @@ class LyricLabel(QWidget):
     
     def set_dim(self, is_dim: bool) -> None:
         """Atenúa la línea."""
-        self._opacity = 0.5 if is_dim else 1.0
+        # Evitar que las líneas de contexto queden demasiado transparentes.
+        self._opacity = 0.7 if is_dim else 1.0
         self._update_style()
     
     def set_translation_visible(self, visible: bool) -> None:
