@@ -872,6 +872,8 @@ class LyricsOverlay(QWidget):
         """
         Crea o recrea los labels de líneas según la configuración actual.
         """
+        self._last_rendered_line_idx = -1  # Invalidar caché de redibujo
+        
         # Limpiar labels existentes
         for label in self.line_labels:
             label.line_clicked.disconnect(self._on_line_clicked)
@@ -959,6 +961,7 @@ class LyricsOverlay(QWidget):
         """
         self._lyrics = lyrics
         self._current_line_index = -1
+        self._last_rendered_line_idx = -1  # Forzar renderizado profundo la próxima vez
 
         # Si no hay letras, mostrar mensaje de espera
         if lyrics is None or not lyrics.lines:
@@ -1028,42 +1031,48 @@ class LyricsOverlay(QWidget):
         if self._lyrics is None or not self._lyrics.lines:
             return
 
-        # Obtener líneas de contexto
-        context = self._lyrics.get_context_lines(
-            state.current_line_index,
-            before=self.config.lines_before,
-            after=self.config.lines_after,
-        )
-
-        # Limpiar todas las líneas
-        for label in self.line_labels:
-            label.setText("")
-            label.setTranslation("")
-            label.set_current(False)
-            label.set_dim(False)
-            label.clear_line_info()
-
-        # Mapear contexto a labels
-        center_idx = self.config.lines_before
-
-        for relative_idx, line in context:
-            label_idx = center_idx + relative_idx
-
-            if 0 <= label_idx < len(self.line_labels):
-                label = self.line_labels[label_idx]
-                label.setText(line.text)
-                # Establecer información de la línea para sincronización por clic
-                real_index = state.current_line_index + relative_idx
-                label.set_line_info(real_index, line.timestamp_ms)
-                # Pasar traducción si existe
-                if hasattr(line, "translation") and line.translation:
-                    label.setTranslation(line.translation)
-                label.set_current(relative_idx == 0)
-                label.set_dim(relative_idx != 0)
+        # Solo reconstruir el layout de letras si el índice cambió o no hay caché
+        needs_layout_update = getattr(self, "_last_rendered_line_idx", -1) != state.current_line_index
         
-        # Trigger layout update prior to scrolling logic (H4 scrolling adjustment)
-        self.lyrics_container.adjustSize()
-        self._ensure_center_visible(center_idx)
+        if needs_layout_update:
+            self._last_rendered_line_idx = state.current_line_index
+            
+            # Obtener líneas de contexto
+            context = self._lyrics.get_context_lines(
+                state.current_line_index,
+                before=self.config.lines_before,
+                after=self.config.lines_after,
+            )
+
+            # Limpiar todas las líneas
+            for label in self.line_labels:
+                label.setText("")
+                label.setTranslation("")
+                label.set_current(False)
+                label.set_dim(False)
+                label.clear_line_info()
+
+            # Mapear contexto a labels
+            center_idx = self.config.lines_before
+
+            for relative_idx, line in context:
+                label_idx = center_idx + relative_idx
+
+                if 0 <= label_idx < len(self.line_labels):
+                    label = self.line_labels[label_idx]
+                    label.setText(line.text)
+                    # Establecer información de la línea para sincronización por clic
+                    real_index = state.current_line_index + relative_idx
+                    label.set_line_info(real_index, line.timestamp_ms)
+                    # Pasar traducción si existe
+                    if hasattr(line, "translation") and line.translation:
+                        label.setTranslation(line.translation)
+                    label.set_current(relative_idx == 0)
+                    label.set_dim(relative_idx != 0)
+            
+            # Trigger layout update prior to scrolling logic (H4 scrolling adjustment)
+            self.lyrics_container.adjustSize()
+            self._ensure_center_visible(center_idx)
 
         # Actualizar indicadores — formato compacto (H8)
         if self.config.show_progress:
