@@ -135,6 +135,16 @@ class MediaDetector:
         self._polling = False
         self._poll_interval = 0.1  # 100ms
 
+        # Referencia al event loop para callbacks desde hilos WinRT
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+
+    def _schedule_async(self, coro) -> None:
+        """Programa una coroutine en el event loop principal desde cualquier hilo."""
+        if self._loop is not None and self._loop.is_running():
+            self._loop.call_soon_threadsafe(
+                lambda: self._loop.create_task(coro)
+            )
+
     async def initialize(self) -> bool:
         """
         Inicializa la conexión con Windows Media Session.
@@ -143,6 +153,9 @@ class MediaDetector:
             True si se inicializó correctamente.
         """
         try:
+            # Guardar referencia al event loop actual para callbacks WinRT
+            self._loop = asyncio.get_running_loop()
+
             self._manager = await MediaManager.request_async()
 
             if self._manager is None:
@@ -154,7 +167,7 @@ class MediaDetector:
 
             # Registrar callback para cambios de sesión
             self._manager.add_current_session_changed(
-                lambda sender, args: asyncio.create_task(self._on_session_changed())
+                lambda sender, args: self._schedule_async(self._on_session_changed())
             )
 
             logger.info("MediaDetector inicializado correctamente")
@@ -196,17 +209,17 @@ class MediaDetector:
             if session:
                 logger.info(f"Sesión activa: {session.source_app_user_model_id}")
 
-                # Registrar callbacks de la sesión
+                # Registrar callbacks de la sesión (se disparan desde hilos WinRT)
                 session.add_media_properties_changed(
-                    lambda s, a: asyncio.create_task(
+                    lambda s, a: self._schedule_async(
                         self._on_media_properties_changed()
                     )
                 )
                 session.add_playback_info_changed(
-                    lambda s, a: asyncio.create_task(self._on_playback_info_changed())
+                    lambda s, a: self._schedule_async(self._on_playback_info_changed())
                 )
                 session.add_timeline_properties_changed(
-                    lambda s, a: asyncio.create_task(
+                    lambda s, a: self._schedule_async(
                         self._on_timeline_properties_changed()
                     )
                 )
@@ -294,10 +307,10 @@ class MediaDetector:
 
             state = status_map.get(playback_info.playback_status, PlayerState.STOPPED)
 
-            # Convertir TimeSpan a milisegundos
-            # WinRT TimeSpan está en unidades de 100 nanosegundos
-            position_ms = int(timeline.position.duration / 10000)
-            duration_ms = int(timeline.end_time.duration / 10000)
+            # Convertir timedelta a milisegundos
+            # winsdk convierte WinRT TimeSpan a datetime.timedelta de Python
+            position_ms = int(timeline.position.total_seconds() * 1000)
+            duration_ms = int(timeline.end_time.total_seconds() * 1000)
 
             # Timestamp de última actualización
             last_updated = datetime.now()

@@ -22,9 +22,7 @@ try:
     KEYBOARD_AVAILABLE = True
 except ImportError:
     KEYBOARD_AVAILABLE = False
-    print(
-        "WARNING: 'keyboard' library not available. Install with: pip install keyboard"
-    )
+    # El aviso se muestra en la UI (notificación del tray) en lugar de la consola
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +35,7 @@ class HotkeyAction(Enum):
     OFFSET_INCREASE = "offset_increase"
     OFFSET_DECREASE = "offset_decrease"
     OFFSET_RESET = "offset_reset"
+    QUIT_APP = "quit_app"
 
 
 @dataclass
@@ -66,15 +65,16 @@ class HotkeyManager:
             HotkeyAction.TOGGLE_OVERLAY, "ctrl+shift+l", "Mostrar/ocultar overlay"
         ),
         HotkeyConfig(
-            HotkeyAction.TOGGLE_TRANSLATION, "ctrl+t", "Mostrar/ocultar traducción"
+            HotkeyAction.TOGGLE_TRANSLATION, "ctrl+t", "Activar/desactivar traducción"
         ),
         HotkeyConfig(
-            HotkeyAction.OFFSET_INCREASE, "ctrl+alt+up", "Aumentar offset (+500ms)"
+            HotkeyAction.OFFSET_INCREASE, "ctrl+alt+up", "Retrasar letras (si van adelantadas)"
         ),
         HotkeyConfig(
-            HotkeyAction.OFFSET_DECREASE, "ctrl+alt+down", "Disminuir offset (-500ms)"
+            HotkeyAction.OFFSET_DECREASE, "ctrl+alt+down", "Adelantar letras (si van atrasadas)"
         ),
-        HotkeyConfig(HotkeyAction.OFFSET_RESET, "ctrl+alt+r", "Resetear offset"),
+        HotkeyConfig(HotkeyAction.OFFSET_RESET, "ctrl+alt+r", "Resetear sincronización"),
+        HotkeyConfig(HotkeyAction.QUIT_APP, "ctrl+shift+q", "Salir de la aplicación"),
     ]
 
     def __init__(self):

@@ -56,7 +56,7 @@ class OverlayConfig:
     width: int = 600
     height: int = 280  # Más altura para traducciones
     # Opacidad del fondo del contenedor (0.0-1.0). Valores altos mejoran legibilidad.
-    opacity: float = 0.97
+    opacity: float = 0.85
     font_size: int = 18
     font_family: str = "Segoe UI"
     bg_color: str = "#1a1a2e"
@@ -306,6 +306,11 @@ class SyncTimeDialog(QDialog):
         label = QLabel("Ingresa el tiempo actual de la canción:")
         layout.addWidget(label)
 
+        # Sub-label de ayuda contextual (H2)
+        help_label = QLabel("Formato mm:ss — sirve para sincronizar las letras")
+        help_label.setStyleSheet("color: #888; font-size: 11px;")
+        layout.addWidget(help_label)
+
         # Campo de tiempo
         self.time_input = QLineEdit()
         self.time_input.setPlaceholderText("mm:ss")
@@ -326,16 +331,51 @@ class SyncTimeDialog(QDialog):
         cancel_btn.setObjectName("cancelBtn")
         cancel_btn.clicked.connect(self.reject)
 
-        ok_btn = QPushButton("Sincronizar")
-        ok_btn.clicked.connect(self.accept)
-        ok_btn.setDefault(True)
+        self._ok_btn = QPushButton("Sincronizar")
+        self._ok_btn.clicked.connect(self.accept)
+        self._ok_btn.setDefault(True)
 
         button_layout.addWidget(cancel_btn)
-        button_layout.addWidget(ok_btn)
+        button_layout.addWidget(self._ok_btn)
         layout.addLayout(button_layout)
 
         # Enter para aceptar
         self.time_input.returnPressed.connect(self.accept)
+
+        # Validación en tiempo real (H5)
+        self.time_input.textChanged.connect(self._validate_input)
+        self._validate_input(self.time_input.text())
+
+    def _validate_input(self, text: str) -> None:
+        """Valida el formato mm:ss y actualiza visual del campo."""
+        valid = self._is_valid_time(text)
+        self._ok_btn.setEnabled(valid)
+        border_color = "#00d4ff" if valid else "#ff4444"
+        self.time_input.setStyleSheet(
+            f"""
+            QLineEdit {{
+                background-color: #2a2a4e;
+                color: white;
+                border: 2px solid {border_color};
+                border-radius: 5px;
+                padding: 8px;
+                font-size: 18px;
+                font-family: monospace;
+            }}
+        """
+        )
+
+    @staticmethod
+    def _is_valid_time(text: str) -> bool:
+        """Devuelve True si el texto es un tiempo válido (mm:ss o ss)."""
+        import re
+        text = text.strip()
+        if re.match(r"^\d{1,3}:\d{2}$", text):
+            parts = text.split(":")
+            return 0 <= int(parts[1]) < 60
+        if re.match(r"^\d{1,5}$", text):
+            return True
+        return False
 
     def get_time_ms(self) -> Optional[int]:
         """
@@ -554,7 +594,7 @@ class LyricsOverlay(QWidget):
 
         container_layout.addLayout(close_btn_layout)
 
-        # Header con info de canción (separado del botón)
+        # Header con info de canción (separado del botón) — arrastrable con click izq. (H4)
         self.header = QLabel()
         self.header.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.header.setStyleSheet(
@@ -564,8 +604,14 @@ class LyricsOverlay(QWidget):
                 font-size: 11px;
                 padding: 2px;
             }
+            QLabel:hover {
+                color: rgba(255, 255, 255, 0.9);
+                background-color: rgba(255,255,255,0.04);
+                border-radius: 4px;
+            }
         """
         )
+        self.header.setCursor(Qt.CursorShape.OpenHandCursor)
         self.header.hide()
         container_layout.addWidget(self.header)
 
@@ -585,11 +631,11 @@ class LyricsOverlay(QWidget):
             self.lyrics_container, 1
         )  # stretch=1 para que ocupe espacio disponible
 
-        # Footer con progreso e indicadores
+        # Footer con progreso e indicadores (H8: simplificado)
         footer_layout = QHBoxLayout()
         footer_layout.setContentsMargins(0, 5, 0, 0)
 
-        # Indicador de modo sync
+        # Indicador de modo sync — solo aparece temporalmente al cambiar (H8)
         self.sync_indicator = QLabel()
         self.sync_indicator.setStyleSheet(
             """
@@ -601,9 +647,32 @@ class LyricsOverlay(QWidget):
         )
         footer_layout.addWidget(self.sync_indicator)
 
+        # Botón "↩ Auto" — visible solo en modo scroll manual (H3)
+        self._back_to_auto_btn = QPushButton("↩ Auto")
+        self._back_to_auto_btn.setFixedHeight(20)
+        self._back_to_auto_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._back_to_auto_btn.setStyleSheet(
+            """
+            QPushButton {
+                background-color: rgba(0, 212, 255, 0.15);
+                color: #00d4ff;
+                border: 1px solid rgba(0, 212, 255, 0.3);
+                border-radius: 4px;
+                font-size: 10px;
+                padding: 0 8px;
+            }
+            QPushButton:hover {
+                background-color: rgba(0, 212, 255, 0.3);
+            }
+        """
+        )
+        self._back_to_auto_btn.clicked.connect(self._exit_manual_scroll_mode)
+        self._back_to_auto_btn.hide()
+        footer_layout.addWidget(self._back_to_auto_btn)
+
         footer_layout.addStretch()
 
-        # Indicador de offset
+        # Indicador temporal de offset / traducción / estado (H1)
         self.offset_indicator = QLabel()
         self.offset_indicator.setStyleSheet(
             """
@@ -619,7 +688,7 @@ class LyricsOverlay(QWidget):
 
         footer_layout.addStretch()
 
-        # Progreso
+        # Progreso (X/Y • mm:ss) — formato compacto (H8)
         self.progress_label = QLabel()
         self.progress_label.setStyleSheet(
             """
@@ -892,7 +961,7 @@ class LyricsOverlay(QWidget):
                 label.set_current(relative_idx == 0)
                 label.set_dim(relative_idx != 0)
 
-        # Actualizar indicadores
+        # Actualizar indicadores — formato compacto (H8)
         if self.config.show_progress:
             current, total = state.current_line_index + 1, len(self._lyrics.lines)
             self.progress_label.setText(f"{current}/{total}")
@@ -902,12 +971,24 @@ class LyricsOverlay(QWidget):
         seconds = (state.position_ms % 60000) // 1000
         self.time_label.setText(f"{minutes:02d}:{seconds:02d}")
 
+        # Sync mode: solo mostrar temporalmente cuando cambia (H8)
         if self.config.show_sync_mode:
             mode_text = "⏱ Sync" if state.mode == SyncMode.SYNCED else "📜 Estimado"
-            # Añadir indicador de traducción si está habilitada
             if self.config.translation_enabled:
                 mode_text += " 🌐"
-            self.sync_indicator.setText(mode_text)
+            new_mode = mode_text
+            if not hasattr(self, "_last_sync_mode_text") or self._last_sync_mode_text != new_mode:
+                self._last_sync_mode_text = new_mode
+                self.sync_indicator.setText(new_mode)
+                # Ocultar después de 3 s
+                if not hasattr(self, "_sync_mode_timer"):
+                    self._sync_mode_timer = QTimer()
+                    self._sync_mode_timer.setSingleShot(True)
+                    self._sync_mode_timer.timeout.connect(lambda: self.sync_indicator.setText(""))
+                self._sync_mode_timer.start(3000)
+
+        # Ocultar botón "Auto" fuera de modo manual
+        self._back_to_auto_btn.hide()
 
     def show_offset_indicator(self, offset_ms: int) -> None:
         """Muestra temporalmente el indicador de offset."""
@@ -1017,9 +1098,19 @@ class LyricsOverlay(QWidget):
 
     # --- Eventos de mouse para arrastrar y redimensionar ---
 
+    def _is_in_header_area(self, pos: QPoint) -> bool:
+        """Detecta si el cursor está sobre la zona del header (arrastrable)."""
+        if not self.header.isVisible():
+            # Si no hay header visible, la zona de arrastre es la franja superior (40px)
+            return pos.y() <= 40
+        header_geo = self.header.geometry()
+        # Incluir un poco de margen alrededor del header
+        return pos.y() <= header_geo.bottom() + 5
+
     def mousePressEvent(self, event: QMouseEvent) -> None:
         """Maneja el click del mouse."""
-        if event.button() == Qt.MouseButton.MiddleButton:
+        # Click izquierdo: arrastrar desde header o redimensionar desde bordes (H4)
+        if event.button() == Qt.MouseButton.LeftButton:
             pos = event.position().toPoint()
             edge = self._get_edge_at_pos(pos)
 
@@ -1033,13 +1124,36 @@ class LyricsOverlay(QWidget):
                     self.geometry().height(),
                     event.globalPosition().toPoint(),
                 )
+                event.accept()
+            elif self._is_in_header_area(pos):
+                # Arrastrar ventana desde el header
+                self._drag_position = (
+                    event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+                )
+                self.header.setCursor(Qt.CursorShape.ClosedHandCursor)
+                event.accept()
             else:
-                # Iniciar arrastre
+                # Propagar para que LyricLabel reciba el click
+                super().mousePressEvent(event)
+
+        elif event.button() == Qt.MouseButton.MiddleButton:
+            pos = event.position().toPoint()
+            edge = self._get_edge_at_pos(pos)
+
+            if edge:
+                self._resize_edge = edge
+                self._resize_start_rect = (
+                    self.geometry().x(),
+                    self.geometry().y(),
+                    self.geometry().width(),
+                    self.geometry().height(),
+                    event.globalPosition().toPoint(),
+                )
+            else:
                 self._drag_position = (
                     event.globalPosition().toPoint() - self.frameGeometry().topLeft()
                 )
                 self.setCursor(Qt.CursorShape.SizeAllCursor)
-
             event.accept()
 
         elif event.button() == Qt.MouseButton.RightButton:
@@ -1049,13 +1163,14 @@ class LyricsOverlay(QWidget):
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
         """Maneja el movimiento del mouse."""
-        if event.buttons() == Qt.MouseButton.MiddleButton:
+        active_buttons = event.buttons()
+        is_dragging = active_buttons in (Qt.MouseButton.LeftButton, Qt.MouseButton.MiddleButton)
+
+        if is_dragging:
             if self._resize_edge and self._resize_start_rect:
-                # Redimensionando
                 self._do_resize(event.globalPosition().toPoint())
                 event.accept()
             elif self._drag_position is not None:
-                # Arrastrando
                 self.move(event.globalPosition().toPoint() - self._drag_position)
                 event.accept()
         else:
@@ -1108,10 +1223,14 @@ class LyricsOverlay(QWidget):
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         """Maneja cuando se suelta el mouse."""
-        if event.button() == Qt.MouseButton.MiddleButton:
+        if event.button() in (Qt.MouseButton.MiddleButton, Qt.MouseButton.LeftButton):
             self._drag_position = None
             self._resize_edge = None
             self._resize_start_rect = None
+
+            # Restaurar cursor del header
+            if self.header.isVisible():
+                self.header.setCursor(Qt.CursorShape.OpenHandCursor)
 
             # Actualizar cursor según posición actual
             edge = self._get_edge_at_pos(event.position().toPoint())
@@ -1191,11 +1310,12 @@ class LyricsOverlay(QWidget):
                 label.set_current(relative_idx == 0)
                 label.set_dim(relative_idx != 0)
 
-        # Mostrar indicador de modo manual
+        # Mostrar indicador de modo manual + botón "Auto" (H3)
         current = self._manual_line_index + 1
         total = len(self._lyrics.lines)
         self.progress_label.setText(f"{current}/{total}")
-        self.sync_indicator.setText("📜 Manual (scroll)")
+        self.sync_indicator.setText("📜 Manual")
+        self._back_to_auto_btn.show()
 
         # Mostrar tiempo de la línea actual en el label de tiempo
         current_line = self._lyrics.lines[self._manual_line_index]
@@ -1209,7 +1329,10 @@ class LyricsOverlay(QWidget):
     def _exit_manual_scroll_mode(self) -> None:
         """Sale del modo scroll manual y vuelve a sincronización automática."""
         self._manual_scroll_mode = False
+        self._manual_scroll_timer.stop()
         self.offset_indicator.hide()
+        self._back_to_auto_btn.hide()
+        self.sync_indicator.setText("")
         logger.info("Volviendo a modo sincronizado automáticamente")
 
     def _on_line_clicked(self, line_index: int, timestamp_ms: int) -> None:
@@ -1290,13 +1413,32 @@ class LyricsOverlay(QWidget):
         )
         return self.config.translation_enabled
 
-    def set_no_lyrics_available(self) -> None:
-        """Muestra mensaje de que no hay letras disponibles."""
-        self._show_message("📝 Letra no disponible")
+    def set_no_lyrics_available(self, artist: str = "", title: str = "") -> None:
+        """Muestra mensaje de que no hay letras disponibles con sugerencia (H9)."""
+        msg = "📝 Letra no disponible"
+        if artist and title:
+            msg = f"📝 Letra no disponible para {artist} - {title}"
+        self._show_message(msg)
+        # Sugerencia en sync_indicator
+        self.sync_indicator.setText("Click derecho para sincronizar manualmente")
 
-    def set_searching_lyrics(self) -> None:
-        """Muestra mensaje de búsqueda en progreso."""
-        self._show_message("🔍 Buscando letra...")
+    def set_searching_lyrics(self, source: str = "") -> None:
+        """Muestra mensaje de búsqueda en progreso (H1)."""
+        if source:
+            self._show_message(f"🔍 Buscando en {source}...")
+        else:
+            self._show_message("🔍 Buscando letra...")
+
+    def set_translating(self) -> None:
+        """Muestra indicador temporal de traducción en progreso (H1)."""
+        self.offset_indicator.setText("🌐 Traduciendo...")
+        self.offset_indicator.show()
+
+    def set_translation_done(self) -> None:
+        """Oculta el indicador de traducción en progreso."""
+        self.offset_indicator.setText("🌐 Traducción lista")
+        self.offset_indicator.show()
+        self._indicator_timer.start(2000)
 
     def set_track_info(self, artist: str, title: str) -> None:
         """

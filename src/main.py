@@ -11,7 +11,7 @@ import logging
 import sys
 from typing import Optional
 
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtCore import QTimer
 import qasync
 
@@ -19,9 +19,17 @@ from .window_detector import WindowTitleDetector, TrackInfo, PlaybackInfo, Playe
 from .lyrics_service import LyricsService, LyricsSearchResult
 from .translation_service import TranslationService
 from .sync_engine import SyncEngine, SyncState, SyncMode
-from .hotkeys import HotkeyManager, HotkeyAction
+from .hotkeys import HotkeyManager, HotkeyAction, KEYBOARD_AVAILABLE
+from .settings import SettingsManager
 from .ui.overlay import LyricsOverlay, OverlayConfig
 from .ui.tray import TrayIcon
+
+# Intentar importar el detector SMTC como primario (H7)
+try:
+    from .detector import MediaDetector
+    SMTC_AVAILABLE = True
+except Exception:
+    SMTC_AVAILABLE = False
 
 # Configurar logging
 logging.basicConfig(
@@ -33,7 +41,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-class LetraCacionApp:
+class LetraCancionApp:
     """
     Aplicación principal que orquesta todos los componentes.
     """
@@ -48,14 +56,35 @@ class LetraCacionApp:
         self.overlay: Optional[LyricsOverlay] = None
         self.tray: Optional[TrayIcon] = None
 
+        # Configuración persistente (H7)
+        self.settings_manager = SettingsManager()
+
         # Estado
         self._current_track: Optional[TrackInfo] = None
         self._running: bool = False
-        self._translation_enabled: bool = True  # Traducción habilitada por defecto
+        self._translation_enabled: bool = self.settings_manager.settings.translation_enabled
 
         # Qt App
         self.app: Optional[QApplication] = None
         self.loop: Optional[asyncio.AbstractEventLoop] = None
+
+    def _build_overlay_config(self) -> OverlayConfig:
+        """Construye OverlayConfig desde la configuración persistente."""
+        s = self.settings_manager.settings
+        return OverlayConfig(
+            width=s.overlay_width,
+            height=s.overlay_height,
+            opacity=s.opacity,
+            font_size=s.font_size,
+            font_family=s.font_family,
+            bg_color=s.bg_color,
+            text_color=s.text_color,
+            highlight_color=s.highlight_color,
+            dim_color=s.dim_color,
+            translation_enabled=s.translation_enabled,
+            translation_font_size=s.translation_font_size,
+            translation_color=s.translation_color,
+        )
 
     async def initialize(self) -> bool:
         """
@@ -67,12 +96,25 @@ class LetraCacionApp:
         logger.info("Inicializando Letra Canción...")
 
         try:
-            # 1. Inicializar detector de música (via título de ventana)
+            # 1. Inicializar detector de música — SMTC primario, WindowTitle fallback (H7)
             logger.info("Inicializando detector de música...")
-            self.detector = WindowTitleDetector(poll_interval=1.0)
-            if not await self.detector.initialize():
-                logger.error("No se pudo inicializar el detector de música")
-                return False
+            smtc_ok = False
+            if SMTC_AVAILABLE:
+                try:
+                    self.detector = MediaDetector(target_app="Qobuz")
+                    smtc_ok = await self.detector.initialize()
+                    if smtc_ok:
+                        logger.info("Usando detector SMTC (posición real)")
+                except Exception as e:
+                    logger.warning(f"SMTC no disponible, usando fallback: {e}")
+                    smtc_ok = False
+
+            if not smtc_ok:
+                logger.info("Usando detector por título de ventana (posición estimada)")
+                self.detector = WindowTitleDetector(poll_interval=1.0)
+                if not await self.detector.initialize():
+                    logger.error("No se pudo inicializar el detector de música")
+                    return False
 
             # Registrar callbacks del detector
             self.detector.on_track_changed(self._on_track_changed)
@@ -92,16 +134,27 @@ class LetraCacionApp:
             self.sync_engine = SyncEngine(self.detector)
             self.sync_engine.on_sync_update(self._on_sync_update)
 
-            # 4. Crear UI
+            # 4. Crear UI — usar configuración persistente (H7)
             logger.info("Inicializando interfaz de usuario...")
-            self.overlay = LyricsOverlay(OverlayConfig())
-            self.tray = TrayIcon()
+            self.overlay = LyricsOverlay(self._build_overlay_config())
+            self.tray = TrayIcon(settings=self.settings_manager.settings)
+
+            # Restaurar posición del overlay si fue guardada (H7)
+            s = self.settings_manager.settings
+            if s.overlay_x >= 0 and s.overlay_y >= 0:
+                self.overlay.move(s.overlay_x, s.overlay_y)
 
             # Conectar signals del tray
             self.tray.toggle_overlay.connect(self._toggle_overlay)
+            self.tray.toggle_translation.connect(self._toggle_translation)
             self.tray.offset_reset.connect(self._reset_offset)
-            self.tray.offset_increase.connect(lambda: self._adjust_offset(500))
-            self.tray.offset_decrease.connect(lambda: self._adjust_offset(-500))
+            self.tray.offset_increase.connect(
+                lambda: self._adjust_offset(self.settings_manager.settings.offset_step_ms)
+            )
+            self.tray.offset_decrease.connect(
+                lambda: self._adjust_offset(-self.settings_manager.settings.offset_step_ms)
+            )
+            self.tray.open_settings.connect(self._apply_settings)
             self.tray.quit_app.connect(self._quit)
 
             # Conectar signals del overlay
@@ -118,6 +171,14 @@ class LetraCacionApp:
 
         except Exception as e:
             logger.error(f"Error durante la inicialización: {e}")
+            # H9: Mostrar diálogo de error antes de salir
+            QMessageBox.critical(
+                None,
+                "Error de inicialización",
+                f"No se pudo iniciar la aplicación.\n\nError: {e}\n\n"
+                "Verifique que Qobuz esté abierto y que las dependencias\n"
+                "estén instaladas correctamente.",
+            )
             return False
 
     def _on_track_changed(self, track: Optional[TrackInfo]) -> None:
@@ -186,6 +247,8 @@ class LetraCacionApp:
                     async def translate_and_update():
                         try:
                             logger.info("Traduciendo letras en segundo plano...")
+                            # H1: Indicador visual de traducción en progreso
+                            self.overlay.set_translating()
                             translated_lyrics = await asyncio.to_thread(
                                 self.translation_service.translate_lyrics, lyrics_data
                             )
@@ -213,14 +276,23 @@ class LetraCacionApp:
                                 translated_lyrics, duration_ms or 0
                             )
                             self.overlay.set_lyrics(translated_lyrics)
+                            self.overlay.set_translation_done()
                         except Exception as e:
                             logger.warning(f"Error en traducción: {e}")
+                            # H1/H9: Notificar al usuario que la traducción falló
+                            self.tray.show_notification(
+                                "Traducción no disponible",
+                                f"No se pudo traducir la letra: {e}",
+                                duration_ms=3000,
+                            )
+                            self.overlay.set_translation_done()
 
                     asyncio.create_task(translate_and_update())
             else:
                 logger.info("No se encontraron letras")
                 self.sync_engine.clear_lyrics()
-                self.overlay.set_no_lyrics_available()
+                # H9: mensaje con artista/título para contexto
+                self.overlay.set_no_lyrics_available(track.artist, track.title)
                 self.tray.show_lyrics_not_found()
 
         except Exception as e:
@@ -232,8 +304,9 @@ class LetraCacionApp:
         logger.debug(f"Playback: {playback.state.name}")
 
         # Pausar/reanudar el sync engine según el estado de reproducción
+        # Comparamos por nombre para compatibilidad entre los enums de detector.py y window_detector.py
         if self.sync_engine:
-            if playback.state == PlayerState.PLAYING:
+            if playback.state.name == "PLAYING":
                 self.sync_engine.resume()
             else:
                 self.sync_engine.pause()
@@ -255,17 +328,18 @@ class LetraCacionApp:
             self._toggle_translation()
 
         elif action == HotkeyAction.OFFSET_INCREASE:
-            if self.sync_engine:
-                new_offset = self.sync_engine.adjust_offset(500)
-                self.overlay.show_offset_indicator(new_offset)
+            step = self.settings_manager.settings.offset_step_ms
+            self._adjust_offset(step)
 
         elif action == HotkeyAction.OFFSET_DECREASE:
-            if self.sync_engine:
-                new_offset = self.sync_engine.adjust_offset(-500)
-                self.overlay.show_offset_indicator(new_offset)
+            step = self.settings_manager.settings.offset_step_ms
+            self._adjust_offset(-step)
 
         elif action == HotkeyAction.OFFSET_RESET:
             self._reset_offset()
+
+        elif action == HotkeyAction.QUIT_APP:
+            self._quit()
 
     def _toggle_overlay(self) -> None:
         """Alterna la visibilidad del overlay."""
@@ -279,7 +353,45 @@ class LetraCacionApp:
         if self.overlay:
             enabled = self.overlay.toggle_translation()
             self._translation_enabled = enabled
+            # H6: Sincronizar estado con el menú del tray
+            if self.tray:
+                self.tray.set_translation_enabled(enabled)
+            # Persistir preferencia
+            self.settings_manager.settings.translation_enabled = enabled
+            self.settings_manager.save()
             logger.info(f"Traducción {'habilitada' if enabled else 'deshabilitada'}")
+
+    def _apply_settings(self) -> None:
+        """Aplica la configuración cambiada desde el diálogo de settings (H7)."""
+        self.settings_manager.save()
+        s = self.settings_manager.settings
+        self._translation_enabled = s.translation_enabled
+
+        # Reconstruir config del overlay
+        if self.overlay:
+            self.overlay.config.opacity = s.opacity
+            self.overlay.config.font_size = s.font_size
+            self.overlay.config.translation_font_size = s.translation_font_size
+            self.overlay.config.translation_enabled = s.translation_enabled
+            # Refrescar estilos del container
+            self.overlay.container.setStyleSheet(
+                f"""
+                QFrame#container {{
+                    background-color: rgba(26, 26, 46, {int(s.opacity * 255)});
+                    border-radius: 15px;
+                    border: 1px solid rgba(255, 255, 255, 0.1);
+                }}
+            """
+            )
+            # Actualizar labels de traducción
+            for label in self.overlay.line_labels:
+                label.set_translation_visible(s.translation_enabled)
+            self.overlay._recalculate_visible_lines()
+
+        if self.tray:
+            self.tray.set_translation_enabled(s.translation_enabled)
+
+        logger.info("Configuración aplicada")
 
     def _reset_offset(self) -> None:
         """Resetea el offset de sincronización."""
@@ -297,14 +409,34 @@ class LetraCacionApp:
 
     def _on_sync_time_changed(self, time_ms: int) -> None:
         """Callback cuando el usuario establece manualmente el tiempo de sincronización."""
-        if self.detector:
+        if self.detector and hasattr(self.detector, 'set_position_ms'):
             self.detector.set_position_ms(time_ms)
             logger.info(f"Sincronización manual establecida: {time_ms}ms")
+        else:
+            # MediaDetector no soporta set_position_ms — calcular offset necesario
+            logger.info(f"Sincronización manual: ajustando offset para posición {time_ms}ms")
+            if self.sync_engine and self.detector:
+                current_pos = self.detector.get_interpolated_position_ms()
+                offset_delta = time_ms - current_pos
+                new_offset = self.sync_engine.adjust_offset(offset_delta)
+                if self.overlay:
+                    self.overlay.show_offset_indicator(new_offset)
 
     def _quit(self) -> None:
         """Cierra la aplicación de forma segura."""
         logger.info("Cerrando aplicación...")
         self._running = False
+
+        # H7: Guardar posición y tamaño del overlay antes de cerrar
+        if self.overlay:
+            pos = self.overlay.pos()
+            size = self.overlay.size()
+            s = self.settings_manager.settings
+            s.overlay_x = pos.x()
+            s.overlay_y = pos.y()
+            s.overlay_width = size.width()
+            s.overlay_height = size.height()
+            self.settings_manager.save()
 
         # Detener componentes primero
         try:
@@ -337,17 +469,45 @@ class LetraCacionApp:
         # Iniciar hotkeys
         self.hotkey_manager.start()
 
-        # Mostrar notificación de inicio
-        self.tray.show_notification(
-            "Letras Sincronizadas",
-            "Aplicación iniciada.\n"
-            "Ctrl+Shift+L para mostrar/ocultar.\n"
-            "Clic derecho en el icono para más opciones.",
-            duration_ms=5000,
-        )
+        # H5: Avisar si la librería keyboard no está disponible
+        if not KEYBOARD_AVAILABLE:
+            self.tray.show_notification(
+                "⚠ Atajos no disponibles",
+                "La librería 'keyboard' no está instalada.\n"
+                "Los atajos de teclado no funcionarán.\n"
+                "Instale con: pip install keyboard",
+                duration_ms=8000,
+            )
+
+        # H10: Onboarding para primera ejecución
+        s = self.settings_manager.settings
+        if s.first_run:
+            self.tray.show_notification(
+                "Letras Sincronizadas",
+                "¡Bienvenido! La aplicación está lista.\n\n"
+                "• Ctrl+Shift+L: mostrar/ocultar overlay\n"
+                "• Ctrl+T: activar/desactivar traducción\n"
+                "• Arrastra el header para mover la ventana\n"
+                "• Click derecho: ajustar sincronización\n"
+                "• Menú del tray: Configuración y Ayuda",
+                duration_ms=10000,
+            )
+            s.first_run = False
+            s.onboarding_shown = True
+            self.settings_manager.save()
+        else:
+            # Notificación de inicio estándar
+            self.tray.show_notification(
+                "Letras Sincronizadas",
+                "Aplicación iniciada.\n"
+                "Ctrl+Shift+L para mostrar/ocultar.\n"
+                "Clic derecho en el icono para más opciones.",
+                duration_ms=5000,
+            )
 
         # Verificar si ya hay música reproduciéndose
-        self.detector._check_for_changes()  # Verificación inicial
+        if hasattr(self.detector, '_check_for_changes'):
+            self.detector._check_for_changes()  # Verificación inicial (WindowTitleDetector)
         if self.detector.current_track:
             self._on_track_changed(self.detector.current_track)
 
@@ -391,17 +551,7 @@ class LetraCacionApp:
 
 def main():
     """Punto de entrada principal."""
-    print(
-        """
-    ╔═══════════════════════════════════════════════════════════╗
-    ║                                                           ║
-    ║   🎵  LETRAS SINCRONIZADAS PARA QOBUZ  🎵                ║
-    ║                                                           ║
-    ║   Detecta música • Busca letras • Sincroniza en vivo     ║
-    ║                                                           ║
-    ╚═══════════════════════════════════════════════════════════╝
-    """
-    )
+    logger.info("🎵 Letras Sincronizadas para Qobuz — Iniciando...")
 
     # Crear aplicación Qt
     app = QApplication(sys.argv)
@@ -413,7 +563,7 @@ def main():
     asyncio.set_event_loop(loop)
 
     # Crear aplicación
-    letra_app = LetraCacionApp()
+    letra_app = LetraCancionApp()
     letra_app.app = app
     letra_app.loop = loop
 

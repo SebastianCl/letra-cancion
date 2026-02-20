@@ -13,6 +13,9 @@ from PyQt6.QtWidgets import QSystemTrayIcon, QMenu, QApplication
 from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor, QFont, QAction
 from PyQt6.QtCore import pyqtSignal, QObject
 
+from .settings import SettingsDialog, HelpDialog
+from ..settings import AppSettings
+
 logger = logging.getLogger(__name__)
 
 
@@ -33,18 +36,21 @@ class TrayIcon(QObject):
     show_overlay = pyqtSignal()
     hide_overlay = pyqtSignal()
     toggle_overlay = pyqtSignal()
+    toggle_translation = pyqtSignal()
     offset_reset = pyqtSignal()
     offset_increase = pyqtSignal()
     offset_decrease = pyqtSignal()
     open_settings = pyqtSignal()
     quit_app = pyqtSignal()
 
-    def __init__(self, parent=None):
+    def __init__(self, settings: Optional[AppSettings] = None, parent=None):
         super().__init__(parent)
 
+        self._settings = settings
         self._tray: Optional[QSystemTrayIcon] = None
         self._menu: Optional[QMenu] = None
         self._overlay_visible: bool = True
+        self._translation_enabled: bool = True
 
         # Info actual de la canción
         self._current_track: str = "Sin reproducción"
@@ -103,32 +109,39 @@ class TrayIcon(QObject):
         self._toggle_action.triggered.connect(self._on_toggle_clicked)
         self._menu.addAction(self._toggle_action)
 
-        # Submenú de sincronización
+        # Toggle traducción (H6: hacer visible, antes solo Ctrl+T invisible)
+        self._translation_action = QAction("🌐 Traducción: Activada")
+        self._translation_action.triggered.connect(self._on_translation_toggled)
+        self._menu.addAction(self._translation_action)
+
+        # Submenú de sincronización (H2: lenguaje natural)
         sync_menu = self._menu.addMenu("⏱ Sincronización")
 
-        # Aumentar offset
-        offset_up_action = QAction("⬆ Retrasar letra (+500ms)")
+        offset_up_action = QAction("⏩ Letras van adelantadas (+500ms)")
         offset_up_action.triggered.connect(lambda: self.offset_increase.emit())
         sync_menu.addAction(offset_up_action)
 
-        # Disminuir offset
-        offset_down_action = QAction("⬇ Adelantar letra (-500ms)")
+        offset_down_action = QAction("⏪ Letras van atrasadas (-500ms)")
         offset_down_action.triggered.connect(lambda: self.offset_decrease.emit())
         sync_menu.addAction(offset_down_action)
 
         sync_menu.addSeparator()
 
-        # Resetear offset
         reset_action = QAction("🔄 Resetear sincronización")
         reset_action.triggered.connect(lambda: self.offset_reset.emit())
         sync_menu.addAction(reset_action)
 
         self._menu.addSeparator()
 
-        # Info de hotkeys
-        hotkeys_action = QAction("⌨ Atajos de teclado")
-        hotkeys_action.triggered.connect(self._show_hotkeys_info)
-        self._menu.addAction(hotkeys_action)
+        # Configuración (H7)
+        settings_action = QAction("⚙ Configuración")
+        settings_action.triggered.connect(self._show_settings)
+        self._menu.addAction(settings_action)
+
+        # Ayuda (H10)
+        help_action = QAction("❓ Ayuda")
+        help_action.triggered.connect(self._show_help)
+        self._menu.addAction(help_action)
 
         self._menu.addSeparator()
 
@@ -159,14 +172,31 @@ class TrayIcon(QObject):
             # Click simple: también toggle
             self.toggle_overlay.emit()
 
+    def _on_translation_toggled(self) -> None:
+        """Maneja el click en toggle traducción."""
+        self.toggle_translation.emit()
+
+    def _show_settings(self) -> None:
+        """Abre el diálogo de configuración (H7)."""
+        if self._settings is None:
+            return
+        dialog = SettingsDialog(self._settings)
+        dialog.settings_changed.connect(lambda: self.open_settings.emit())
+        dialog.exec()
+
+    def _show_help(self) -> None:
+        """Abre el diálogo de ayuda (H10)."""
+        dialog = HelpDialog()
+        dialog.exec()
+
     def _show_hotkeys_info(self) -> None:
         """Muestra información de los hotkeys disponibles."""
         self._tray.showMessage(
             "Atajos de teclado",
             "Ctrl+Shift+L: Mostrar/ocultar letras\n"
+            "Ctrl+T: Activar/desactivar traducción\n"
             "Ctrl+Alt+↑/↓: Ajustar sincronización\n"
             "Ctrl+Alt+R: Resetear sincronización\n"
-            "Ctrl+Shift+M: Mover overlay\n"
             "Ctrl+Shift+Q: Salir",
             QSystemTrayIcon.MessageIcon.Information,
             5000,
@@ -227,6 +257,15 @@ class TrayIcon(QObject):
                 self._toggle_action.setText("👁 Ocultar letras")
             else:
                 self._toggle_action.setText("👁 Mostrar letras")
+
+    def set_translation_enabled(self, enabled: bool) -> None:
+        """Actualiza el estado de traducción en el menú (H6)."""
+        self._translation_enabled = enabled
+        if self._translation_action:
+            if enabled:
+                self._translation_action.setText("🌐 Traducción: Activada")
+            else:
+                self._translation_action.setText("🌐 Traducción: Desactivada")
 
     def show_notification(
         self,

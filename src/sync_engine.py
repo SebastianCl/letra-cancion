@@ -78,6 +78,7 @@ class SyncEngine:
         # Estado de sincronización
         self._current_line_index: int = -1
         self._offset_ms: int = 0
+        self._previous_offset_ms: int = 0  # H3: para "deshacer offset"
 
         # Control de loop - usar QTimer para no bloquear con asyncio
         self._running: bool = False
@@ -169,6 +170,7 @@ class SyncEngine:
         Returns:
             Nuevo valor de offset.
         """
+        self._previous_offset_ms = self._offset_ms  # H3: guardar para undo
         new_offset = self._offset_ms + delta_ms
         new_offset = max(self.MIN_OFFSET_MS, min(self.MAX_OFFSET_MS, new_offset))
         self._offset_ms = new_offset
@@ -177,8 +179,20 @@ class SyncEngine:
 
     def reset_offset(self) -> None:
         """Reinicia el offset a 0."""
+        self._previous_offset_ms = self._offset_ms  # H3: guardar para undo
         self._offset_ms = 0
         logger.info("Offset reiniciado a 0")
+
+    def undo_offset(self) -> int:
+        """
+        Restaura el offset anterior (H3: deshacer).
+
+        Returns:
+            Valor de offset restaurado.
+        """
+        self._offset_ms, self._previous_offset_ms = self._previous_offset_ms, self._offset_ms
+        logger.info(f"Offset restaurado: {self._offset_ms}ms")
+        return self._offset_ms
 
     def _get_line_at_position(
         self, position_ms: int

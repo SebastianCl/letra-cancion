@@ -11,10 +11,7 @@ PyQt6>=6.6.0
 qasync>=0.27.0
 
 # Hotkeys globales
-pynput>=1.7.6
-
-# Utilidades
-python-dotenv>=1.0.0
+keyboard>=0.13.5
 
 # Traducción de letras
 deep-translator>=1.11.0
