@@ -96,71 +96,63 @@ class LyricLabel(QWidget):
         self._real_line_index: int = -1  # Índice real en la lista de líneas
         self._timestamp_ms: int = 0  # Timestamp de la línea
         self._is_dual_column = is_dual_column
+        self._has_translation_data = False
 
         # Habilitar hover
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
-        if self._is_dual_column:
-            layout = QHBoxLayout(self)
-            layout.setContentsMargins(10, 2, 10, 2)
-            layout.setSpacing(20)
-        else:
-            # Layout vertical para original + traducción
-            layout = QVBoxLayout(self)
-            layout.setContentsMargins(0, 2, 0, 2)
-            layout.setSpacing(2)
+        # Usar siempre QHBoxLayout para mantener consistencia de layout
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(10, 2, 10, 2)
+        layout.setSpacing(20)
 
-        # Label para texto original
+        # Label para texto original (Columna izquierda)
         self._original_label = QLabel()
-        if self._is_dual_column:
+        self._original_label.setWordWrap(True)
+        layout.addWidget(self._original_label, stretch=1)
+
+        # Label para traducción (Columna derecha)
+        self._translation_label = QLabel()
+        self._translation_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self._translation_label.setWordWrap(True)
+        layout.addWidget(self._translation_label, stretch=1)
+
+        self.set_dual_column_mode(self._is_dual_column)
+        self._update_style()
+
+    def set_dual_column_mode(self, dual: bool) -> None:
+        """Actualiza el modo del label (1 columna o 2 columnas)"""
+        self._is_dual_column = dual
+        
+        if dual:
             self._original_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         else:
             self._original_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._original_label.setWordWrap(True)
-        
-        if self._is_dual_column:
-            layout.addWidget(self._original_label, stretch=1)
-        else:
-            layout.addWidget(self._original_label)
-
-        # Label para traducción
-        self._translation_label = QLabel()
-        if self._is_dual_column:
-            self._translation_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        else:
-            self._translation_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._translation_label.setWordWrap(True)
-        self._translation_label.setStyleSheet(
-            f"""
-            QLabel {{
-                color: {config.translation_color};
-                font-size: {config.translation_font_size}px;
-                font-style: italic;
-            }}
-        """
-        )
-        if self._is_dual_column:
-            layout.addWidget(self._translation_label, stretch=1)
-        else:
-            layout.addWidget(self._translation_label)
-
-        self._update_style()
+            
+        self._update_translation_visibility()
 
     def setText(self, text: str) -> None:
         """Establece el texto original."""
         self._original_label.setText(text)
 
     def setTranslation(self, translation: str) -> None:
-        """Establece la traducción."""
-        if translation and self._translation_visible:
-            if self._is_dual_column:
-                self._translation_label.setText(translation)
-            else:
-                self._translation_label.setText(f"→ {translation}")
+        """Establece la traducción o su estado de carga para prevalecer el espacio."""
+        if translation:
+            self._has_translation_data = True
+            self._translation_label.setText(translation)
+        else:
+            self._has_translation_data = False
+            self._translation_label.setText("Traduciendo..." if self._is_current else "")
+
+        self._update_translation_visibility()
+        self._update_style()
+
+    def _update_translation_visibility(self) -> None:
+        """Evalúa si el label derecho debe verse (depende del layout y settings)."""
+        if self._translation_visible and self._is_dual_column:
             self._translation_label.show()
         else:
-            self._translation_label.setText("")
             self._translation_label.hide()
 
     def text(self) -> str:
@@ -170,6 +162,10 @@ class LyricLabel(QWidget):
     def set_current(self, is_current: bool) -> None:
         """Marca esta línea como actual o no."""
         self._is_current = is_current
+        
+        if not self._has_translation_data:
+            self._translation_label.setText("Traduciendo..." if self._is_current else "")
+            
         self._update_style()
 
     def set_dim(self, is_dim: bool) -> None:
@@ -179,12 +175,9 @@ class LyricLabel(QWidget):
         self._update_style()
 
     def set_translation_visible(self, visible: bool) -> None:
-        """Muestra u oculta la traducción."""
+        """Muestra u oculta la traducción (global)."""
         self._translation_visible = visible
-        if not visible:
-            self._translation_label.hide()
-        elif self._translation_label.text():
-            self._translation_label.show()
+        self._update_translation_visibility()
 
     def set_line_info(self, index: int, timestamp_ms: int) -> None:
         """Establece la información de la línea para sincronización."""
@@ -236,15 +229,17 @@ class LyricLabel(QWidget):
             self._original_label.setGraphicsEffect(None)
             
             # Traducción más visible cuando es línea actual
-            if self._translation_visible:
+            if self._translation_visible and self._is_dual_column:
                 self._translation_label.setGraphicsEffect(None)
+                color = "rgba(255, 255, 255, 0.9)" if self._has_translation_data else "rgba(255, 255, 255, 0.4)"
+                style = "normal" if self._has_translation_data else "italic"
                 self._translation_label.setStyleSheet(
                     f"""
                     QLabel {{
-                        color: rgba(255, 255, 255, 0.9);
+                        color: {color};
                         font-size: {self._config.translation_font_size + 4}px;
                         font-weight: 500;
-                        font-style: normal;
+                        font-style: {style};
                     }}
                 """
                 )
@@ -263,18 +258,20 @@ class LyricLabel(QWidget):
             self._original_label.setGraphicsEffect(blur)
 
             # Traducción atenuada para líneas de contexto
-            if self._translation_visible:
+            if self._translation_visible and self._is_dual_column:
                 t_blur = QGraphicsBlurEffect()
                 t_blur.setBlurRadius(1.5)
                 self._translation_label.setGraphicsEffect(t_blur)
-
+                
+                color = "rgba(255, 255, 255, 0.3)" if self._has_translation_data else "rgba(255, 255, 255, 0.15)"
+                style = "normal" if self._has_translation_data else "italic"
                 self._translation_label.setStyleSheet(
                     f"""
                     QLabel {{
-                        color: rgba(255, 255, 255, {self._opacity * 0.3});
+                        color: {color};
                         font-size: {self._config.translation_font_size}px;
                         font-weight: 400;
-                        font-style: normal;
+                        font-style: {style};
                     }}
                 """
                 )
@@ -1146,8 +1143,9 @@ class LyricsOverlay(QWidget):
             self.config.line_height_with_translation = 100
             logger.info("Overlay maximizado a modo expandido")
 
-        # Actualizar fuentes de los labels
+        # Actualizar fuentes y layout de los labels
         for label in self.line_labels:
+            label.set_dual_column_mode(self._is_maximized)
             label._update_style()
             
         self.geom_anim.start()
@@ -1347,13 +1345,13 @@ class LyricsOverlay(QWidget):
         """
         super().resizeEvent(event)
         
-        # Determinar si el ancho amerita dos columnas (ej: >= 750)
-        new_is_dual_column = self.width() >= 750
-        
+        # Actualizar layout/columnas solo si el estado cambió
+        new_is_dual_column = self._is_maximized
         if new_is_dual_column != self._is_dual_column:
             self._is_dual_column = new_is_dual_column
-            # Forzamos la recreación de los labels para que adopten el nuevo layout
             self._last_calculated_lines = 0
+            for label in self.line_labels:
+                label.set_dual_column_mode(self._is_dual_column)
 
         # Recalcular líneas visibles cuando cambia el tamaño
         self._recalculate_visible_lines()
