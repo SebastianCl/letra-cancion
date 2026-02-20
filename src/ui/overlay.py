@@ -24,6 +24,8 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QDialogButtonBox,
+    QScrollArea,
+    QSizePolicy,
 )
 from PyQt6.QtCore import (
     Qt,
@@ -110,12 +112,14 @@ class LyricLabel(QWidget):
         # Label para texto original (Columna izquierda)
         self._original_label = QLabel()
         self._original_label.setWordWrap(True)
+        self._original_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.MinimumExpanding)
         layout.addWidget(self._original_label, stretch=1)
 
         # Label para traducción (Columna derecha)
         self._translation_label = QLabel()
         self._translation_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self._translation_label.setWordWrap(True)
+        self._translation_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.MinimumExpanding)
         layout.addWidget(self._translation_label, stretch=1)
 
         self.set_dual_column_mode(self._is_dual_column)
@@ -650,11 +654,18 @@ class LyricsOverlay(QWidget):
         self.header.hide()
         container_layout.addWidget(self.header)
 
-        # Área de letras
+        # Área de letras con QScrollArea incrustada para evitar cortes (H8 modificado)
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        
         self.lyrics_container = QWidget()
+        self.lyrics_container.setStyleSheet("QWidget { background: transparent; }")
         self.lyrics_layout = QVBoxLayout(self.lyrics_container)
         self.lyrics_layout.setContentsMargins(0, 0, 0, 0)
         self.lyrics_layout.setSpacing(4)
+        
+        self.scroll_area.setWidget(self.lyrics_container)
 
         # Lista de labels para las líneas (se crean dinámicamente)
         self.line_labels: list[LyricLabel] = []
@@ -663,7 +674,7 @@ class LyricsOverlay(QWidget):
         self._create_line_labels()
 
         container_layout.addWidget(
-            self.lyrics_container, 1
+            self.scroll_area, 1
         )  # stretch=1 para que ocupe espacio disponible
 
         # Footer premium (H8: remodelado)
@@ -804,22 +815,19 @@ class LyricsOverlay(QWidget):
 
     def _calculate_visible_lines(self) -> int:
         """
-        Calcula el número de líneas visibles según el alto de la ventana.
-
-        Returns:
-            Número total de líneas que caben en la ventana.
+        Calcula el número de líneas visibles sugeridas. En ScrollArea se pueden
+        acumular más pero esto define la ventana simétrica original.
         """
         available_height = self.height() - self.config.header_footer_height
 
-        # Elegir altura de línea según si hay traducciones
-        if self.config.translation_enabled and not self._is_dual_column:
-            line_height = self.config.line_height_with_translation
+        # Valor estricto más grande si es pantalla maximizada
+        if self._is_maximized:
+             base_height = self.config.line_height_with_translation
         else:
-            # En dual_column no se apilan, usamos la altura simple con algo de padding extra
-            line_height = self.config.line_height_without_translation + (10 if self._is_dual_column else 0)
+             base_height = self.config.line_height_without_translation
 
-        # Calcular cuántas líneas caben
-        num_lines = max(self.config.min_visible_lines, available_height // line_height)
+        # Calcular cuántas líneas caben mínimo
+        num_lines = max(self.config.min_visible_lines, available_height // base_height)
 
         # Asegurar número impar para tener una línea central
         if num_lines % 2 == 0:
@@ -1052,6 +1060,10 @@ class LyricsOverlay(QWidget):
                     label.setTranslation(line.translation)
                 label.set_current(relative_idx == 0)
                 label.set_dim(relative_idx != 0)
+        
+        # Trigger layout update prior to scrolling logic (H4 scrolling adjustment)
+        self.lyrics_container.adjustSize()
+        self._ensure_center_visible(center_idx)
 
         # Actualizar indicadores — formato compacto (H8)
         if self.config.show_progress:
@@ -1084,6 +1096,23 @@ class LyricsOverlay(QWidget):
 
         # Ocultar botón "Auto" fuera de modo manual
         self._back_to_auto_btn.hide()
+
+    def _ensure_center_visible(self, center_idx: int) -> None:
+        """Ajusta dinámicamente el QScrollArea vertical para mantener la línea activa en el centro"""
+        if 0 <= center_idx < len(self.line_labels):
+            target_widget = self.line_labels[center_idx]
+            # Usar QTimer simple shot para permitir al layout calcular dimensiones reales primero
+            QTimer.singleShot(10, lambda: self._scroll_to_center(target_widget))
+            
+    def _scroll_to_center(self, target_widget: QWidget) -> None:
+        """Aplica el valor del slider vertical para centrar el widget activo"""
+        scroll_bar = self.scroll_area.verticalScrollBar()
+        widget_y = target_widget.geometry().y()
+        widget_h = target_widget.geometry().height()
+        view_h = self.scroll_area.viewport().height()
+        
+        target_scroll = widget_y - (view_h // 2) + (widget_h // 2)
+        scroll_bar.setValue(max(0, min(target_scroll, scroll_bar.maximum())))
 
     def show_offset_indicator(self, offset_ms: int) -> None:
         """Muestra temporalmente el indicador de offset."""
