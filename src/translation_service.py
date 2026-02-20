@@ -1,7 +1,9 @@
 """
 Servicio de traducción de letras.
 
-Traduce letras de canciones de inglés a español usando Google Translate.
+Traduce letras de canciones bidireccionalmente entre inglés y español
+usando Google Translate. Detecta automáticamente el idioma de las letras
+y traduce en la dirección correcta (EN→ES o ES→EN).
 Incluye caché local para evitar traducciones repetidas.
 """
 
@@ -159,6 +161,85 @@ def _is_spanish_text(text: str) -> bool:
     return matches >= 3
 
 
+def _is_english_text(text: str) -> bool:
+    """
+    Detecta si el texto está en inglés usando heurísticas simples.
+
+    Busca palabras comunes en inglés que son poco frecuentes en español.
+    """
+    english_indicators = [
+        r"\bthe\b",
+        r"\bis\b",
+        r"\bare\b",
+        r"\byou\b",
+        r"\bmy\b",
+        r"\bwith\b",
+        r"\bthis\b",
+        r"\bthat\b",
+        r"\bhave\b",
+        r"\bwas\b",
+        r"\bfor\b",
+        r"\bnot\b",
+        r"\bbut\b",
+        r"\bwhat\b",
+        r"\bwhen\b",
+        r"\byour\b",
+        r"\bfrom\b",
+        r"\bthey\b",
+        r"\bwill\b",
+        r"\bcan\b",
+        r"\bjust\b",
+        r"\bdon't\b",
+        r"\bknow\b",
+        r"\blike\b",
+        r"\btime\b",
+        r"\bcome\b",
+        r"\bmake\b",
+        r"\bwant\b",
+        r"\bhere\b",
+        r"\bthere\b",
+        r"\binto\b",
+        r"\bonly\b",
+        r"\bsome\b",
+        r"\bcould\b",
+        r"\bwould\b",
+        r"\band\b",
+        r"\ball\b",
+        r"\been\b",
+    ]
+
+    text_lower = text.lower()
+    matches = sum(1 for pattern in english_indicators if re.search(pattern, text_lower))
+
+    # Si encontramos al menos 3 indicadores en el texto completo, probablemente es inglés
+    return matches >= 3
+
+
+def _detect_language(text: str) -> tuple[str, str]:
+    """
+    Detecta el idioma del texto y retorna la dirección de traducción.
+
+    Returns:
+        Tupla (source_lang, target_lang) para usar con GoogleTranslator.
+        Ejemplo: ("en", "es") para inglés→español, ("es", "en") para español→inglés.
+    """
+    is_spanish = _is_spanish_text(text)
+    is_english = _is_english_text(text)
+
+    if is_spanish and not is_english:
+        # Texto en español → traducir a inglés
+        return ("es", "en")
+    elif is_english and not is_spanish:
+        # Texto en inglés → traducir a español
+        return ("en", "es")
+    elif is_spanish and is_english:
+        # Ambiguo (posiblemente bilingüe) → dejar que Google auto-detecte, target español
+        return ("auto", "es")
+    else:
+        # No se detectó ninguno → auto-detectar con Google, target español
+        return ("auto", "es")
+
+
 def _is_instrumental_line(text: str) -> bool:
     """Detecta si una línea es instrumental o no tiene contenido traducible."""
     text_lower = text.lower().strip()
@@ -190,12 +271,13 @@ def _is_instrumental_line(text: str) -> bool:
 
 class TranslationService:
     """
-    Servicio de traducción de letras usando Google Translate.
+    Servicio de traducción bidireccional de letras usando Google Translate.
 
     Características:
+    - Traducción bidireccional: inglés↔español (auto-detecta dirección)
     - Traducción batch para eficiencia
     - Caché local de traducciones
-    - Detección de idioma para evitar traducir español
+    - Detección automática de idioma
     - Manejo de líneas instrumentales
     """
 
@@ -213,20 +295,30 @@ class TranslationService:
         self, source: str = "en", target: str = "es"
     ) -> GoogleTranslator:
         """Obtiene o crea el traductor."""
-        if self._translator is None or self._translator.target != target:
+        if (
+            self._translator is None
+            or self._translator.target != target
+            or self._translator.source != source
+        ):
             self._translator = GoogleTranslator(source=source, target=target)
         return self._translator
 
     def translate_lyrics(
-        self, lyrics: LyricsData, target_lang: str = "es", force: bool = False
+        self, lyrics: LyricsData, target_lang: str = "auto", force: bool = False
     ) -> LyricsData:
         """
         Traduce todas las líneas de las letras.
 
+        Detecta automáticamente el idioma de las letras y traduce en la
+        dirección correcta:
+        - Letras en inglés → traduce a español
+        - Letras en español → traduce a inglés
+
         Args:
             lyrics: Datos de letras a traducir
-            target_lang: Idioma destino (default: español)
-            force: Si es True, traduce aunque parezca estar en español
+            target_lang: Idioma destino. "auto" detecta automáticamente la
+                        dirección. También acepta "es" o "en" para forzar.
+            force: Si es True, traduce sin importar el idioma detectado
 
         Returns:
             LyricsData con traducciones añadidas a cada línea
@@ -237,21 +329,31 @@ class TranslationService:
         artist = lyrics.artist or "Unknown"
         title = lyrics.title or "Unknown"
 
-        # Verificar si ya está en caché
-        cached_translations = self.cache.get(artist, title, target_lang)
-        if cached_translations:
-            logger.info(f"Usando traducciones cacheadas para: {artist} - {title}")
-            return self._apply_translations(lyrics, cached_translations)
-
         # Recolectar texto para análisis de idioma
         all_text = " ".join(line.text for line in lyrics.lines if line.text.strip())
 
-        # Detectar si ya está en español
-        if not force and _is_spanish_text(all_text):
-            logger.info(
-                f"Letras ya están en español, omitiendo traducción: {artist} - {title}"
-            )
-            return lyrics
+        # Detectar dirección de traducción
+        source_lang, detected_target = _detect_language(all_text)
+
+        # Usar target_lang del parámetro solo si no es "auto"
+        if target_lang != "auto":
+            detected_target = target_lang
+            # Si el usuario fuerza un target, ajustar source coherentemente
+            if detected_target == "es":
+                source_lang = "en"
+            elif detected_target == "en":
+                source_lang = "es"
+
+        logger.info(
+            f"Dirección de traducción detectada: {source_lang}→{detected_target} "
+            f"para: {artist} - {title}"
+        )
+
+        # Verificar si ya está en caché
+        cached_translations = self.cache.get(artist, title, detected_target)
+        if cached_translations:
+            logger.info(f"Usando traducciones cacheadas para: {artist} - {title}")
+            return self._apply_translations(lyrics, cached_translations)
 
         # Preparar líneas para traducción (filtrar instrumentales)
         lines_to_translate: list[tuple[int, LyricLine]] = []
@@ -266,7 +368,9 @@ class TranslationService:
         # Traducir en batch
         try:
             translations = self._batch_translate(
-                [line.text for _, line in lines_to_translate], target_lang
+                [line.text for _, line in lines_to_translate],
+                source_lang=source_lang,
+                target_lang=detected_target,
             )
 
             # Crear diccionario de traducciones {timestamp_ms: traducción}
@@ -276,7 +380,7 @@ class TranslationService:
                     translation_dict[line.timestamp_ms] = translations[i]
 
             # Guardar en caché
-            self.cache.save(artist, title, translation_dict, target_lang)
+            self.cache.save(artist, title, translation_dict, detected_target)
 
             logger.info(
                 f"Traducidas {len(translation_dict)} líneas para: {artist} - {title}"
@@ -288,13 +392,19 @@ class TranslationService:
             logger.error(f"Error traduciendo letras: {e}")
             return lyrics
 
-    def _batch_translate(self, texts: list[str], target_lang: str = "es") -> list[str]:
+    def _batch_translate(
+        self,
+        texts: list[str],
+        source_lang: str = "en",
+        target_lang: str = "es",
+    ) -> list[str]:
         """
         Traduce múltiples textos en batch.
 
         Args:
             texts: Lista de textos a traducir
-            target_lang: Idioma destino
+            source_lang: Idioma origen ("en", "es" o "auto")
+            target_lang: Idioma destino ("en" o "es")
 
         Returns:
             Lista de traducciones
@@ -302,7 +412,7 @@ class TranslationService:
         if not texts:
             return []
 
-        translator = self._get_translator(source="en", target=target_lang)
+        translator = self._get_translator(source=source_lang, target=target_lang)
 
         try:
             # deep-translator soporta traducción por lotes
@@ -378,8 +488,14 @@ def main():
 
     logging.basicConfig(level=logging.DEBUG)
 
-    # Crear letras de prueba
-    test_lyrics = LyricsData(
+    service = TranslationService()
+
+    # --- Test 1: Letras en inglés → traducción a español ---
+    print("="*60)
+    print("TEST 1: Inglés → Español")
+    print("="*60)
+
+    test_lyrics_en = LyricsData(
         lines=[
             LyricLine(timestamp_ms=0, text="Hello, how are you?"),
             LyricLine(timestamp_ms=5000, text="I'm doing fine"),
@@ -388,22 +504,52 @@ def main():
             LyricLine(timestamp_ms=20000, text="[Instrumental]"),
             LyricLine(timestamp_ms=25000, text="Love is in the air tonight"),
         ],
-        title="Test Song",
+        title="Test Song EN",
         artist="Test Artist",
         is_synced=True,
     )
 
-    service = TranslationService()
-
-    print("Letras originales:")
-    for line in test_lyrics.lines:
+    print("Letras originales (EN):")
+    for line in test_lyrics_en.lines:
         print(f"  [{line.timestamp_ms}] {line.text}")
 
-    print("\nTraduciendo...")
-    translated = service.translate_lyrics(test_lyrics)
+    print("\nTraduciendo EN→ES...")
+    translated_en = service.translate_lyrics(test_lyrics_en)
 
     print("\nLetras traducidas:")
-    for line in translated.lines:
+    for line in translated_en.lines:
+        print(f"  [{line.timestamp_ms}] {line.text}")
+        if line.translation:
+            print(f"              → {line.translation}")
+
+    # --- Test 2: Letras en español → traducción a inglés ---
+    print("\n" + "="*60)
+    print("TEST 2: Español → Inglés")
+    print("="*60)
+
+    test_lyrics_es = LyricsData(
+        lines=[
+            LyricLine(timestamp_ms=0, text="Hola, ¿cómo estás?"),
+            LyricLine(timestamp_ms=5000, text="La vida es bella y el sol brilla"),
+            LyricLine(timestamp_ms=10000, text="Mi corazón late por ti"),
+            LyricLine(timestamp_ms=15000, text="Quiero estar contigo para siempre"),
+            LyricLine(timestamp_ms=20000, text="[Instrumental]"),
+            LyricLine(timestamp_ms=25000, text="Nunca te voy a olvidar, mi amor"),
+        ],
+        title="Test Song ES",
+        artist="Test Artist",
+        is_synced=True,
+    )
+
+    print("Letras originales (ES):")
+    for line in test_lyrics_es.lines:
+        print(f"  [{line.timestamp_ms}] {line.text}")
+
+    print("\nTraduciendo ES→EN...")
+    translated_es = service.translate_lyrics(test_lyrics_es)
+
+    print("\nLetras traducidas:")
+    for line in translated_es.lines:
         print(f"  [{line.timestamp_ms}] {line.text}")
         if line.translation:
             print(f"              → {line.translation}")
