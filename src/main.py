@@ -135,6 +135,11 @@ class LetraCacionApp:
         
         logger.info(f"Nueva canción: {track}")
         
+        # IMPORTANTE: Limpiar letras anteriores inmediatamente para evitar
+        # mostrar letras de la canción anterior mientras se buscan las nuevas
+        self.sync_engine.clear_lyrics()
+        self.overlay.set_lyrics(None)
+        
         # Actualizar UI inmediatamente
         self.tray.update_track_info(track.artist, track.title)
         self.overlay.set_track_info(track.artist, track.title)
@@ -144,13 +149,13 @@ class LetraCacionApp:
         asyncio.create_task(self._fetch_lyrics(track))
     
     async def _fetch_lyrics(self, track: TrackInfo) -> None:
-        """Busca letras para un track."""
+        """Busca letras para un track y muestra la letra original inmediatamente, traduciendo en segundo plano."""
         try:
             # Obtener duración si está disponible
             duration_ms = None
             if self.detector.current_playback:
                 duration_ms = self.detector.current_playback.duration_ms
-            
+
             # Buscar letras
             result = await self.lyrics_service.search(
                 artist=track.artist,
@@ -158,46 +163,53 @@ class LetraCacionApp:
                 album=track.album,
                 duration_ms=duration_ms
             )
-            
-            # Verificar que siga siendo el mismo track
-            if self._current_track != track:
+
+            # Verificar que siga siendo el mismo track (usar matches() para comparar por contenido)
+            if self._current_track is None or not self._current_track.matches(track):
                 logger.debug("Track cambió durante búsqueda, descartando resultado")
                 return
-            
+
             if result and result.lyrics_data.lines:
                 logger.info(f"Letras encontradas ({result.provider}): {len(result.lyrics_data.lines)} líneas")
-                
+
                 lyrics_data = result.lyrics_data
-                
-                # Traducir si está habilitado (en thread separado para no bloquear UI)
-                if self._translation_enabled and self.translation_service:
-                    try:
-                        logger.info("Traduciendo letras...")
-                        # Ejecutar traducción en thread pool para no bloquear
-                        lyrics_data = await asyncio.to_thread(
-                            self.translation_service.translate_lyrics,
-                            lyrics_data
-                        )
-                        translated_count = sum(1 for line in lyrics_data.lines if line.translation)
-                        logger.info(f"Traducción completada: {translated_count} líneas traducidas")
-                    except Exception as e:
-                        logger.warning(f"Error en traducción: {e}")
-                
-                # Cargar en el motor de sincronización
+
+                # Mostrar letra original inmediatamente
                 self.sync_engine.set_lyrics(lyrics_data, duration_ms or 0)
-                
-                # Actualizar overlay
                 self.overlay.set_lyrics(lyrics_data)
-                
-                # Notificar
                 if not result.cached:
                     self.tray.show_lyrics_found(result.provider)
+
+                # Lanzar traducción en segundo plano si está habilitada
+                if self._translation_enabled and self.translation_service:
+                    async def translate_and_update():
+                        try:
+                            logger.info("Traduciendo letras en segundo plano...")
+                            translated_lyrics = await asyncio.to_thread(
+                                self.translation_service.translate_lyrics,
+                                lyrics_data
+                            )
+                            translated_count = sum(1 for line in translated_lyrics.lines if getattr(line, 'translation', None))
+                            logger.info(f"Traducción completada: {translated_count} líneas traducidas")
+
+                            # Verificar que siga siendo el mismo track
+                            if self._current_track is None or not self._current_track.matches(track):
+                                logger.debug("Track cambió durante traducción, descartando resultado")
+                                return
+
+                            # Actualizar solo las traducciones en el overlay y sync_engine
+                            self.sync_engine.set_lyrics(translated_lyrics, duration_ms or 0)
+                            self.overlay.set_lyrics(translated_lyrics)
+                        except Exception as e:
+                            logger.warning(f"Error en traducción: {e}")
+
+                    asyncio.create_task(translate_and_update())
             else:
                 logger.info("No se encontraron letras")
                 self.sync_engine.clear_lyrics()
                 self.overlay.set_no_lyrics_available()
                 self.tray.show_lyrics_not_found()
-                
+
         except Exception as e:
             logger.error(f"Error buscando letras: {e}")
             self.overlay.set_no_lyrics_available()
