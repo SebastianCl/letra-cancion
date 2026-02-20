@@ -16,6 +16,9 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QFrame,
     QGraphicsDropShadowEffect,
+    QGraphicsBlurEffect,
+    QGraphicsOpacityEffect,
+    QProgressBar,
     QSizeGrip,
     QDialog,
     QLineEdit,
@@ -53,16 +56,16 @@ logger = logging.getLogger(__name__)
 class OverlayConfig:
     """Configuración del overlay."""
 
-    width: int = 600
-    height: int = 280  # Más altura para traducciones
-    # Opacidad del fondo del contenedor (0.0-1.0). Valores altos mejoran legibilidad.
-    opacity: float = 0.85
-    font_size: int = 18
-    font_family: str = "Segoe UI"
-    bg_color: str = "#1a1a2e"
+    width: int = 800
+    height: int = 500  # Más altura para el nuevo diseño de footer
+    # Opacidad del fondo del contenedor (0.0-1.0).
+    opacity: float = 1.0
+    font_size: int = 24
+    font_family: str = "Inter, Segoe UI, sans-serif"
+    bg_color: str = "#0a0a0f"  # Oscuro profundo
     text_color: str = "#ffffff"
-    highlight_color: str = "#00d4ff"
-    dim_color: str = "#666666"
+    highlight_color: str = "#ffffff"
+    dim_color: str = "#888888"
     lines_before: int = 1  # Valor inicial, se recalcula dinámicamente
     lines_after: int = 1  # Valor inicial, se recalcula dinámicamente
     show_progress: bool = True
@@ -72,10 +75,8 @@ class OverlayConfig:
     translation_font_size: int = 14
     translation_color: str = "#aaaaaa"
     # Configuración para cálculo dinámico de líneas
-    line_height_without_translation: int = (
-        36  # Altura estimada por línea sin traducción
-    )
-    line_height_with_translation: int = 56  # Altura estimada por línea con traducción
+    line_height_without_translation: int = 42
+    line_height_with_translation: int = 64
     min_visible_lines: int = 3  # Mínimo de líneas visibles
     header_footer_height: int = 80  # Espacio reservado para header y footer
 
@@ -86,7 +87,7 @@ class LyricLabel(QWidget):
     # Señal emitida cuando se hace clic en la línea (índice real, timestamp_ms)
     line_clicked = pyqtSignal(int, int)
 
-    def __init__(self, config: OverlayConfig, parent=None):
+    def __init__(self, config: OverlayConfig, parent=None, is_dual_column: bool = False):
         super().__init__(parent)
         self._config = config
         self._is_current = False
@@ -94,25 +95,41 @@ class LyricLabel(QWidget):
         self._translation_visible = config.translation_enabled
         self._real_line_index: int = -1  # Índice real en la lista de líneas
         self._timestamp_ms: int = 0  # Timestamp de la línea
+        self._is_dual_column = is_dual_column
 
         # Habilitar hover
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
-        # Layout vertical para original + traducción
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 2, 0, 2)
-        layout.setSpacing(2)
+        if self._is_dual_column:
+            layout = QHBoxLayout(self)
+            layout.setContentsMargins(10, 2, 10, 2)
+            layout.setSpacing(20)
+        else:
+            # Layout vertical para original + traducción
+            layout = QVBoxLayout(self)
+            layout.setContentsMargins(0, 2, 0, 2)
+            layout.setSpacing(2)
 
         # Label para texto original
         self._original_label = QLabel()
-        self._original_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        if self._is_dual_column:
+            self._original_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        else:
+            self._original_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._original_label.setWordWrap(True)
-        layout.addWidget(self._original_label)
+        
+        if self._is_dual_column:
+            layout.addWidget(self._original_label, stretch=1)
+        else:
+            layout.addWidget(self._original_label)
 
         # Label para traducción
         self._translation_label = QLabel()
-        self._translation_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        if self._is_dual_column:
+            self._translation_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        else:
+            self._translation_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._translation_label.setWordWrap(True)
         self._translation_label.setStyleSheet(
             f"""
@@ -123,7 +140,10 @@ class LyricLabel(QWidget):
             }}
         """
         )
-        layout.addWidget(self._translation_label)
+        if self._is_dual_column:
+            layout.addWidget(self._translation_label, stretch=1)
+        else:
+            layout.addWidget(self._translation_label)
 
         self._update_style()
 
@@ -134,7 +154,10 @@ class LyricLabel(QWidget):
     def setTranslation(self, translation: str) -> None:
         """Establece la traducción."""
         if translation and self._translation_visible:
-            self._translation_label.setText(f"→ {translation}")
+            if self._is_dual_column:
+                self._translation_label.setText(translation)
+            else:
+                self._translation_label.setText(f"→ {translation}")
             self._translation_label.show()
         else:
             self._translation_label.setText("")
@@ -188,8 +211,9 @@ class LyricLabel(QWidget):
         if self.text() and self._real_line_index >= 0:
             self._original_label.setStyleSheet(
                 self._original_label.styleSheet()
-                + "background-color: rgba(0, 212, 255, 0.1); border-radius: 4px;"
+                + "background-color: rgba(255, 255, 255, 0.1); border-radius: 8px;"
             )
+            self._original_label.setGraphicsEffect(None)
         super().enterEvent(event)
 
     def leaveEvent(self, event) -> None:
@@ -203,20 +227,24 @@ class LyricLabel(QWidget):
             self._original_label.setStyleSheet(
                 f"""
                 QLabel {{
-                    color: #00d4ff;
-                    font-weight: bold;
-                    font-size: 20px;
+                    color: {self._config.highlight_color};
+                    font-weight: 700;
+                    font-size: {self._config.font_size + 8}px;
                 }}
             """
             )
+            self._original_label.setGraphicsEffect(None)
+            
             # Traducción más visible cuando es línea actual
             if self._translation_visible:
+                self._translation_label.setGraphicsEffect(None)
                 self._translation_label.setStyleSheet(
                     f"""
                     QLabel {{
-                        color: #88ccff;
-                        font-size: {self._config.translation_font_size}px;
-                        font-style: italic;
+                        color: rgba(255, 255, 255, 0.9);
+                        font-size: {self._config.translation_font_size + 4}px;
+                        font-weight: 500;
+                        font-style: normal;
                     }}
                 """
                 )
@@ -224,20 +252,29 @@ class LyricLabel(QWidget):
             self._original_label.setStyleSheet(
                 f"""
                 QLabel {{
-                    color: rgba(255, 255, 255, {self._opacity});
-                    font-weight: normal;
-                    font-size: 16px;
+                    color: rgba(255, 255, 255, {self._opacity * 0.4});
+                    font-weight: 400;
+                    font-size: {self._config.font_size}px;
                 }}
             """
             )
+            blur = QGraphicsBlurEffect()
+            blur.setBlurRadius(1.5)
+            self._original_label.setGraphicsEffect(blur)
+
             # Traducción atenuada para líneas de contexto
             if self._translation_visible:
+                t_blur = QGraphicsBlurEffect()
+                t_blur.setBlurRadius(1.5)
+                self._translation_label.setGraphicsEffect(t_blur)
+
                 self._translation_label.setStyleSheet(
                     f"""
                     QLabel {{
-                        color: rgba(170, 170, 170, {self._opacity * 0.7});
+                        color: rgba(255, 255, 255, {self._opacity * 0.3});
                         font-size: {self._config.translation_font_size}px;
-                        font-style: italic;
+                        font-weight: 400;
+                        font-style: normal;
                     }}
                 """
                 )
@@ -439,6 +476,7 @@ class LyricsOverlay(QWidget):
         self._normal_size: Optional[QSize] = None  # Tamaño normal antes de maximizar
         self._max_width: int = 1000  # Ancho máximo
         self._max_height: int = 600  # Alto máximo
+        self._is_dual_column: bool = False
 
         # Control de líneas dinámicas
         self._last_calculated_lines: int = 0  # Último número de líneas calculado
@@ -505,9 +543,9 @@ class LyricsOverlay(QWidget):
         self.container.setStyleSheet(
             f"""
             QFrame#container {{
-                background-color: rgba(26, 26, 46, {int(self.config.opacity * 255)});
-                border-radius: 15px;
-                border: 1px solid rgba(255, 255, 255, 0.1);
+                background-color: {self.config.bg_color};
+                border-radius: 16px;
+                border: 1px solid rgba(255, 255, 255, 0.05);
             }}
         """
         )
@@ -631,90 +669,134 @@ class LyricsOverlay(QWidget):
             self.lyrics_container, 1
         )  # stretch=1 para que ocupe espacio disponible
 
-        # Footer con progreso e indicadores (H8: simplificado)
+        # Footer premium (H8: remodelado)
         footer_layout = QHBoxLayout()
-        footer_layout.setContentsMargins(0, 5, 0, 0)
+        footer_layout.setContentsMargins(10, 10, 10, 0)
+        footer_layout.setSpacing(15)
 
-        # Indicador de modo sync — solo aparece temporalmente al cambiar (H8)
-        self.sync_indicator = QLabel()
-        self.sync_indicator.setStyleSheet(
-            """
+        # Cover art placeholder / icon
+        self.cover_icon = QLabel("🎵")
+        self.cover_icon.setFixedSize(48, 48)
+        self.cover_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.cover_icon.setStyleSheet("""
             QLabel {
-                color: rgba(255, 255, 255, 0.5);
-                font-size: 10px;
+                background-color: #1ed760;
+                color: #000000;
+                border-radius: 8px;
+                font-size: 24px;
             }
-        """
-        )
-        footer_layout.addWidget(self.sync_indicator)
+        """)
+        footer_layout.addWidget(self.cover_icon)
 
-        # Botón "↩ Auto" — visible solo en modo scroll manual (H3)
+        # Track Info (Title + Artist stacked)
+        track_info_layout = QVBoxLayout()
+        track_info_layout.setSpacing(2)
+        track_info_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+
+        self.track_title_label = QLabel("Esperando música...")
+        self.track_title_label.setStyleSheet("color: white; font-weight: bold; font-size: 16px;")
+        track_info_layout.addWidget(self.track_title_label)
+
+        self.track_artist_label = QLabel("-")
+        self.track_artist_label.setStyleSheet("color: #a0a0a0; font-size: 13px;")
+        track_info_layout.addWidget(self.track_artist_label)
+
+        footer_layout.addLayout(track_info_layout)
+
+        # Progress Block (Time + Scroll + Time)
+        progress_layout = QHBoxLayout()
+        progress_layout.setSpacing(10)
+        progress_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+
+        self.time_label = QLabel("00:00")
+        self.time_label.setStyleSheet("color: #a0a0a0; font-size: 12px; font-variant-numeric: tabular-nums;")
+        progress_layout.addWidget(self.time_label)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setFixedHeight(4)
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setStyleSheet("""
+            QProgressBar {
+                background-color: rgba(255, 255, 255, 0.1);
+                border-radius: 2px;
+            }
+            QProgressBar::chunk {
+                background-color: #ffffff;
+                border-radius: 2px;
+            }
+        """)
+        self.progress_bar.setRange(0, 1000)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setMinimumWidth(100)
+        progress_layout.addWidget(self.progress_bar, 1)
+
+        self.duration_label = QLabel("00:00")
+        self.duration_label.setStyleSheet("color: #a0a0a0; font-size: 12px; font-variant-numeric: tabular-nums;")
+        progress_layout.addWidget(self.duration_label)
+
+        footer_layout.addLayout(progress_layout, 1) # stretch 1
+
+        # Right controls layout
+        right_controls = QHBoxLayout()
+        right_controls.setSpacing(8)
+        right_controls.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
+
+        # Botón "↩ Auto"
         self._back_to_auto_btn = QPushButton("↩ Auto")
-        self._back_to_auto_btn.setFixedHeight(20)
+        self._back_to_auto_btn.setFixedHeight(24)
         self._back_to_auto_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._back_to_auto_btn.setStyleSheet(
-            """
+        self._back_to_auto_btn.setStyleSheet("""
             QPushButton {
-                background-color: rgba(0, 212, 255, 0.15);
-                color: #00d4ff;
-                border: 1px solid rgba(0, 212, 255, 0.3);
-                border-radius: 4px;
-                font-size: 10px;
-                padding: 0 8px;
-            }
-            QPushButton:hover {
-                background-color: rgba(0, 212, 255, 0.3);
-            }
-        """
-        )
-        self._back_to_auto_btn.clicked.connect(self._exit_manual_scroll_mode)
-        self._back_to_auto_btn.hide()
-        footer_layout.addWidget(self._back_to_auto_btn)
-
-        footer_layout.addStretch()
-
-        # Indicador temporal de offset / traducción / estado (H1)
-        self.offset_indicator = QLabel()
-        self.offset_indicator.setStyleSheet(
-            """
-            QLabel {
-                color: #00d4ff;
-                font-size: 10px;
+                background-color: rgba(255, 255, 255, 0.1);
+                color: #ffffff;
+                border: none;
+                border-radius: 12px;
+                font-size: 11px;
+                padding: 0 12px;
                 font-weight: bold;
             }
-        """
-        )
+            QPushButton:hover {
+                background-color: rgba(255, 255, 255, 0.2);
+            }
+        """)
+        self._back_to_auto_btn.clicked.connect(self._exit_manual_scroll_mode)
+        self._back_to_auto_btn.hide()
+        right_controls.addWidget(self._back_to_auto_btn)
+
+        # Indicador temporal de offset / traducción
+        self.offset_indicator = QLabel()
+        self.offset_indicator.setContentsMargins(10, 4, 10, 4)
+        self.offset_indicator.setStyleSheet("""
+            QLabel {
+                background-color: rgba(255, 255, 255, 0.1);
+                color: #ffffff;
+                border-radius: 12px;
+                font-size: 11px;
+                font-weight: bold;
+            }
+        """)
         self.offset_indicator.hide()
-        footer_layout.addWidget(self.offset_indicator)
+        right_controls.addWidget(self.offset_indicator)
 
-        footer_layout.addStretch()
+        # Indicador de modo sync
+        self.sync_indicator = QLabel()
+        self.sync_indicator.setContentsMargins(10, 4, 10, 4)
+        self.sync_indicator.setStyleSheet("""
+            QLabel {
+                background-color: rgba(255, 255, 255, 0.1);
+                color: #ffffff;
+                border-radius: 12px;
+                font-size: 11px;
+            }
+        """)
+        self.sync_indicator.hide()
+        right_controls.addWidget(self.sync_indicator)
 
-        # Progreso (X/Y • mm:ss) — formato compacto (H8)
         self.progress_label = QLabel()
-        self.progress_label.setStyleSheet(
-            """
-            QLabel {
-                color: rgba(255, 255, 255, 0.5);
-                font-size: 10px;
-            }
-        """
-        )
-        footer_layout.addWidget(self.progress_label)
+        self.progress_label.hide()
+        right_controls.addWidget(self.progress_label)
 
-        # Tiempo actual (parte inferior derecha)
-        self.time_label = QLabel()
-        self.time_label.setStyleSheet(
-            """
-            QLabel {
-                color: #cccccc;
-                font-size: 12px;
-                padding-right: 8px;
-            }
-        """
-        )
-        self.time_label.setAlignment(
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-        )
-        footer_layout.addWidget(self.time_label)
+        footer_layout.addLayout(right_controls)
 
         container_layout.addLayout(footer_layout)
 
@@ -733,10 +815,11 @@ class LyricsOverlay(QWidget):
         available_height = self.height() - self.config.header_footer_height
 
         # Elegir altura de línea según si hay traducciones
-        if self.config.translation_enabled:
+        if self.config.translation_enabled and not self._is_dual_column:
             line_height = self.config.line_height_with_translation
         else:
-            line_height = self.config.line_height_without_translation
+            # En dual_column no se apilan, usamos la altura simple con algo de padding extra
+            line_height = self.config.line_height_without_translation + (10 if self._is_dual_column else 0)
 
         # Calcular cuántas líneas caben
         num_lines = max(self.config.min_visible_lines, available_height // line_height)
@@ -795,7 +878,7 @@ class LyricsOverlay(QWidget):
         total_lines = self.config.lines_before + 1 + self.config.lines_after
 
         for i in range(total_lines):
-            label = LyricLabel(self.config)
+            label = LyricLabel(self.config, is_dual_column=self._is_dual_column)
             label.line_clicked.connect(self._on_line_clicked)
             self.line_labels.append(label)
             self.lyrics_layout.addWidget(label)
@@ -881,12 +964,24 @@ class LyricsOverlay(QWidget):
         for label in self.line_labels:
             label.show()
 
-        # Actualizar header con info de la canción
+        # Actualizar footer con info de la canción
         if lyrics.title and lyrics.artist:
-            self.header.setText(f"♪ {lyrics.artist} - {lyrics.title}")
-            self.header.show()
-        else:
+            self.track_title_label.setText(lyrics.title)
+            self.track_artist_label.setText(lyrics.artist)
             self.header.hide()
+        else:
+            self.track_title_label.setText("Desconocido")
+            self.track_artist_label.setText("-")
+            self.header.hide()
+        
+        # Calcular duración total si hay líneas
+        if lyrics.lines:
+            last_line = lyrics.lines[-1]
+            total_time_ms = last_line.timestamp_ms + 5000 # 5 segs extra  
+            minutes = total_time_ms // 60000
+            seconds = (total_time_ms % 60000) // 1000
+            self.duration_label.setText(f"{minutes:02d}:{seconds:02d}")
+            self.progress_bar.setRange(0, total_time_ms)
 
         # Eliminar cualquier mensaje de estado (como 'Buscando letra')
         self.progress_label.setText("")
@@ -970,6 +1065,9 @@ class LyricsOverlay(QWidget):
         minutes = state.position_ms // 60000
         seconds = (state.position_ms % 60000) // 1000
         self.time_label.setText(f"{minutes:02d}:{seconds:02d}")
+        
+        if hasattr(self, 'progress_bar') and self.progress_bar.maximum() > 0:
+            self.progress_bar.setValue(min(state.position_ms, self.progress_bar.maximum()))
 
         # Sync mode: solo mostrar temporalmente cuando cambia (H8)
         if self.config.show_sync_mode:
@@ -1010,18 +1108,49 @@ class LyricsOverlay(QWidget):
 
     def _on_maximize_clicked(self) -> None:
         """Maneja el click en el botón de maximizar."""
+        if not hasattr(self, "geom_anim"):
+            from PyQt6.QtCore import QPropertyAnimation, QEasingCurve, QRect
+            self.geom_anim = QPropertyAnimation(self, b"geometry")
+            self.geom_anim.setDuration(400)
+            self.geom_anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
+
+        self.geom_anim.setStartValue(self.geometry())
+
         if self._is_maximized:
             # Restaurar tamaño normal
-            if self._normal_size:
-                self.resize(self._normal_size)
+            target_rect = getattr(self, "_normal_geom_rect", self.geometry())
+            self.geom_anim.setEndValue(target_rect)
             self._is_maximized = False
+            self.max_btn.setText("⬜")
+            
+            # Restaurar tamaños de fuente compactos
+            self.config.font_size = 24
+            self.config.translation_font_size = 14
+            self.config.line_height_without_translation = 42
+            self.config.line_height_with_translation = 64
             logger.info("Overlay restaurado a tamaño normal")
         else:
-            # Maximizar a tamaño máximo
-            self._normal_size = self.size()  # Guardar tamaño actual
-            self.resize(self._max_width, self._max_height)
+            # Maximizar a tamaño expandido (pantalla completa o casi)
+            self._normal_geom_rect = self.geometry()
+            screen = self.screen().availableGeometry()
+            # Dejar 40px de margen en lugar de fullscreen total (comportamiento inmersivo)
+            target_rect = screen.adjusted(40, 40, -40, -40)
+            self.geom_anim.setEndValue(target_rect)
             self._is_maximized = True
-            logger.info(f"Overlay maximizado a {self._max_width}x{self._max_height}")
+            self.max_btn.setText("🗗") # Icono de restaurar
+
+            # Aumentar tamaño de fuentes
+            self.config.font_size = 42
+            self.config.translation_font_size = 22
+            self.config.line_height_without_translation = 70
+            self.config.line_height_with_translation = 100
+            logger.info("Overlay maximizado a modo expandido")
+
+        # Actualizar fuentes de los labels
+        for label in self.line_labels:
+            label._update_style()
+            
+        self.geom_anim.start()
 
     def _show_sync_dialog(self) -> None:
         """Muestra el diálogo para establecer el tiempo de sincronización."""
@@ -1217,6 +1346,14 @@ class LyricsOverlay(QWidget):
         Recalcula el número de líneas visibles dinámicamente.
         """
         super().resizeEvent(event)
+        
+        # Determinar si el ancho amerita dos columnas (ej: >= 750)
+        new_is_dual_column = self.width() >= 750
+        
+        if new_is_dual_column != self._is_dual_column:
+            self._is_dual_column = new_is_dual_column
+            # Forzamos la recreación de los labels para que adopten el nuevo layout
+            self._last_calculated_lines = 0
 
         # Recalcular líneas visibles cuando cambia el tamaño
         self._recalculate_visible_lines()
@@ -1442,14 +1579,15 @@ class LyricsOverlay(QWidget):
 
     def set_track_info(self, artist: str, title: str) -> None:
         """
-        Actualiza la info del track en el header.
+        Actualiza la info del track en el footer.
 
         Args:
             artist: Nombre del artista
             title: Título de la canción
         """
-        self.header.setText(f"♪ {artist} - {title}")
-        self.header.show()
+        self.track_title_label.setText(title)
+        self.track_artist_label.setText(artist)
+        self.header.hide()
 
 
 # --- Demo standalone ---
