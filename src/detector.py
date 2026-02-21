@@ -141,9 +141,7 @@ class MediaDetector:
     def _schedule_async(self, coro) -> None:
         """Programa una coroutine en el event loop principal desde cualquier hilo."""
         if self._loop is not None and self._loop.is_running():
-            self._loop.call_soon_threadsafe(
-                lambda: self._loop.create_task(coro)
-            )
+            self._loop.call_soon_threadsafe(lambda: self._loop.create_task(coro))
 
     async def initialize(self) -> bool:
         """
@@ -312,8 +310,32 @@ class MediaDetector:
             position_ms = int(timeline.position.total_seconds() * 1000)
             duration_ms = int(timeline.end_time.total_seconds() * 1000)
 
-            # Timestamp de última actualización
-            last_updated = datetime.now()
+            # Determinar el timestamp correcto para interpolación.
+            # SMTC no actualiza la posición continuamente — solo la reporta
+            # cada varios segundos. Si re-estampamos la misma posición con
+            # datetime.now() cada poll, la interpolación solo cubre 0-100ms
+            # en lugar del tiempo real desde la última actualización de SMTC.
+            #
+            # Fix: solo actualizar last_updated cuando la posición o el estado
+            # realmente cambian desde SMTC. Cuando la posición es la misma,
+            # mantener el timestamp original para que la interpolación cubra
+            # el intervalo correcto.
+            if (
+                self._current_playback is not None
+                and position_ms == self._current_playback.position_ms
+                and state == self._current_playback.state
+            ):
+                # SMTC no ha actualizado — mantener timestamp original
+                last_updated = self._current_playback.last_updated
+            else:
+                # Posición o estado cambió — nuevo punto de referencia
+                last_updated = datetime.now()
+                if self._current_playback is not None:
+                    logger.debug(
+                        f"SMTC actualizado: pos={position_ms}ms "
+                        f"(prev={self._current_playback.position_ms}ms, "
+                        f"estado={state.name})"
+                    )
 
             new_playback = PlaybackInfo(
                 state=state,
@@ -400,11 +422,12 @@ class MediaDetector:
 
     def get_interpolated_position_ms(self) -> int:
         """
-        Obtiene la posición interpolada basada en el último update.
+        Obtiene la posición interpolada basada en el último update de SMTC.
 
-        Útil porque Windows no actualiza la posición en tiempo real,
-        sino periódicamente. Esta función estima la posición actual
-        basándose en el tiempo transcurrido.
+        SMTC no actualiza la posición en tiempo real — solo periódicamente
+        (cada pocos segundos). Esta función interpola la posición entre
+        updates de SMTC usando el tiempo transcurrido desde la última
+        actualización real.
         """
         if self._current_playback is None:
             return 0
@@ -412,7 +435,7 @@ class MediaDetector:
         if self._current_playback.state != PlayerState.PLAYING:
             return self._current_playback.position_ms
 
-        # Calcular tiempo transcurrido desde último update
+        # Calcular tiempo transcurrido desde último update real de SMTC
         elapsed = datetime.now() - self._current_playback.last_updated
         elapsed_ms = int(elapsed.total_seconds() * 1000)
 

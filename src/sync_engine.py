@@ -93,6 +93,14 @@ class SyncEngine:
         # Para modo estimado
         self._estimated_line_duration_ms: int = 0
 
+        # Lock temporal para ajustes manuales
+        # Cuando el usuario ajusta la sincronización (clic, offset, seek),
+        # se activa un lock que impide que el auto-sync sobreescriba
+        # el ajuste durante un periodo configurable.
+        self._manual_lock_active: bool = False
+        self._manual_lock_timer: Optional[QTimer] = None
+        self._manual_lock_duration_ms: int = 3000  # 3 segundos por defecto
+
     def set_lyrics(self, lyrics: Optional[LyricsData], duration_ms: int = 0) -> None:
         """
         Establece las letras actuales.
@@ -175,6 +183,13 @@ class SyncEngine:
         new_offset = max(self.MIN_OFFSET_MS, min(self.MAX_OFFSET_MS, new_offset))
         self._offset_ms = new_offset
         logger.info(f"Offset ajustado: {self._offset_ms}ms")
+
+        # Activar lock temporal para que el auto-sync no sobreescriba inmediatamente
+        self._activate_manual_lock()
+
+        # Forzar recálculo inmediato con el nuevo offset
+        self._force_sync_update()
+
         return self._offset_ms
 
     def reset_offset(self) -> None:
@@ -190,7 +205,10 @@ class SyncEngine:
         Returns:
             Valor de offset restaurado.
         """
-        self._offset_ms, self._previous_offset_ms = self._previous_offset_ms, self._offset_ms
+        self._offset_ms, self._previous_offset_ms = (
+            self._previous_offset_ms,
+            self._offset_ms,
+        )
         logger.info(f"Offset restaurado: {self._offset_ms}ms")
         return self._offset_ms
 
@@ -213,16 +231,15 @@ class SyncEngine:
         adjusted_pos = position_ms + self._offset_ms
 
         if self._mode == SyncMode.SYNCED:
-            # Usar timestamps de las letras
-            return self._lyrics.get_line_at(adjusted_pos + self._lyrics.offset_ms)
+            # Usar timestamps de las letras (offset ya incluido en adjusted_pos)
+            return self._lyrics.get_line_at(adjusted_pos)
 
         elif self._mode == SyncMode.ESTIMATED:
             # Calcular línea basada en tiempo estimado
             if self._estimated_line_duration_ms <= 0:
                 return -1, None
 
-            # Empezar después de un margen inicial (5% de la duración)
-            start_offset = int(adjusted_pos * 0.05 / 1000) * 1000  # ~5 segundos
+            # Margen inicial fijo de 5 segundos
             effective_pos = max(0, adjusted_pos - 5000)
 
             line_idx = effective_pos // self._estimated_line_duration_ms
@@ -238,6 +255,11 @@ class SyncEngine:
         if not self.has_lyrics:
             return
 
+        # Si el lock manual está activo, no recalcular desde el detector
+        # para respetar el ajuste del usuario.
+        if self._manual_lock_active:
+            return
+
         # Obtener posición interpolada del detector
         position_ms = self.detector.get_interpolated_position_ms()
         is_playing = self.detector.is_playing
@@ -245,8 +267,21 @@ class SyncEngine:
         # Determinar línea actual
         line_idx, current_line = self._get_line_at_position(position_ms)
 
-        # Solo notificar si cambió la línea o el estado
+        # Solo notificar si cambió la línea
         if line_idx != self._current_line_index:
+            # Protección anti-regresión: evitar que la línea retroceda brevemente
+            # cuando SMTC reporta una posición ligeramente menor que la interpolada.
+            # Solo bloquear retrocesos de 1 línea — retrocesos mayores (seek) sí se aplican.
+            if (
+                line_idx >= 0
+                and self._current_line_index >= 0
+                and line_idx == self._current_line_index - 1
+                and is_playing
+            ):
+                # Retroceso de 1 línea durante reproducción = probable micro-corrección SMTC
+                # Ignorar para evitar flicker
+                return
+
             self._current_line_index = line_idx
 
             # Crear estado de sincronización
@@ -261,6 +296,33 @@ class SyncEngine:
 
             # Notificar a los listeners
             self._notify_sync_update(state)
+
+    def _force_sync_update(self) -> None:
+        """
+        Fuerza una actualización de sincronización inmediata.
+
+        Se usa después de un ajuste manual para reflejar el cambio
+        sin esperar al próximo tick del timer.
+        """
+        if not self.has_lyrics:
+            return
+
+        position_ms = self.detector.get_interpolated_position_ms()
+        is_playing = self.detector.is_playing
+        line_idx, current_line = self._get_line_at_position(position_ms)
+
+        self._current_line_index = line_idx
+
+        state = SyncState(
+            mode=self._mode,
+            current_line_index=line_idx,
+            current_line=current_line,
+            position_ms=position_ms,
+            is_playing=is_playing,
+            offset_ms=self._offset_ms,
+        )
+
+        self._notify_sync_update(state)
 
     def _notify_sync_update(self, state: SyncState) -> None:
         """Notifica a los listeners de cambio en sincronización."""
@@ -329,12 +391,87 @@ class SyncEngine:
         if self._sync_timer:
             self._sync_timer.stop()
             self._sync_timer = None
+        if self._manual_lock_timer:
+            self._manual_lock_timer.stop()
+            self._manual_lock_timer = None
+        self._manual_lock_active = False
         logger.info("SyncEngine detenido")
 
     @property
     def is_running(self) -> bool:
         """Retorna True si el loop está corriendo."""
         return self._running
+
+    # --- Lock temporal para ajustes manuales ---
+
+    def _activate_manual_lock(self) -> None:
+        """
+        Activa el lock temporal que impide que el auto-sync
+        sobreescriba el ajuste manual del usuario.
+
+        Cada invocación reinicia el timer. Al expirar el timer,
+        la sincronización automática retoma el control.
+        """
+        self._manual_lock_active = True
+
+        if self._manual_lock_timer is None:
+            self._manual_lock_timer = QTimer()
+            self._manual_lock_timer.setSingleShot(True)
+            self._manual_lock_timer.timeout.connect(self._deactivate_manual_lock)
+
+        # Reiniciar timer (permite que interacciones sucesivas extiendan el lock)
+        self._manual_lock_timer.start(self._manual_lock_duration_ms)
+        logger.debug(f"Lock manual activado ({self._manual_lock_duration_ms}ms)")
+
+    def _deactivate_manual_lock(self) -> None:
+        """
+        Desactiva el lock temporal y permite que la sincronización
+        automática retome el control.
+        """
+        self._manual_lock_active = False
+        logger.debug("Lock manual desactivado — sincronización automática retomada")
+
+        # Forzar una actualización inmediata para que la transición sea suave
+        if self._running and not self._paused:
+            self._force_sync_update()
+
+    @property
+    def is_manual_lock_active(self) -> bool:
+        """Retorna True si el lock manual está activo."""
+        return self._manual_lock_active
+
+    def apply_manual_sync(self, target_time_ms: int) -> None:
+        """
+        Aplica una sincronización manual: ajusta el offset para que
+        la posición actual del detector apunte a target_time_ms en la letra.
+
+        Usado cuando el usuario hace clic en una línea o usa el diálogo
+        de sincronización manual.
+
+        Args:
+            target_time_ms: Timestamp de la letra al que el usuario quiere sincronizar.
+        """
+        if not self.has_lyrics:
+            return
+
+        current_pos = self.detector.get_interpolated_position_ms()
+        # Calcular el offset necesario: queremos que adjusted_pos = current_pos + offset
+        # corresponda a target_time_ms en la letra
+        needed_offset = target_time_ms - current_pos
+
+        # Aplicar con clampeo
+        self._previous_offset_ms = self._offset_ms
+        self._offset_ms = max(
+            self.MIN_OFFSET_MS, min(self.MAX_OFFSET_MS, needed_offset)
+        )
+        logger.info(
+            f"Sincronización manual: offset={self._offset_ms}ms "
+            f"(target={target_time_ms}ms, pos={current_pos}ms)"
+        )
+
+        # Activar lock y forzar actualización
+        self._activate_manual_lock()
+        self._force_sync_update()
 
     # --- Métodos de utilidad ---
 
@@ -360,6 +497,9 @@ class SyncEngine:
         """
         Salta a una línea específica (para UI interactiva).
 
+        Activa el lock temporal para que el auto-sync no sobreescriba
+        inmediatamente la línea seleccionada por el usuario.
+
         Args:
             line_index: Índice de la línea objetivo.
         """
@@ -380,6 +520,9 @@ class SyncEngine:
             )
 
             self._notify_sync_update(state)
+
+            # Activar lock para que el ajuste persista
+            self._activate_manual_lock()
 
     def get_progress(self) -> tuple[int, int]:
         """

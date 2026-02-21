@@ -14,6 +14,7 @@ Tags de metadatos (opcionales):
 """
 
 import re
+from bisect import bisect_right
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -59,8 +60,11 @@ class LyricsData:
         """
         Encuentra la línea que corresponde a una posición temporal.
 
+        Búsqueda pura por timestamp — no aplica ningún offset.
+        El offset debe ser gestionado externamente (por SyncEngine).
+
         Args:
-            position_ms: Posición actual en milisegundos
+            position_ms: Posición ya ajustada en milisegundos
 
         Returns:
             Tupla (índice, LyricLine) o (-1, None) si no hay línea
@@ -68,19 +72,13 @@ class LyricsData:
         if not self.lines:
             return -1, None
 
-        # Aplicar offset
-        adjusted_pos = position_ms - self.offset_ms
+        # Búsqueda binaria: encontrar la última línea con timestamp <= position_ms
+        # Construimos las claves de búsqueda a partir de los timestamps
+        timestamps = [line.timestamp_ms for line in self.lines]
+        idx = bisect_right(timestamps, position_ms) - 1
 
-        # Buscar la línea cuyo timestamp sea <= posición actual
-        result_idx = -1
-        for idx, line in enumerate(self.lines):
-            if line.timestamp_ms <= adjusted_pos:
-                result_idx = idx
-            else:
-                break
-
-        if result_idx >= 0:
-            return result_idx, self.lines[result_idx]
+        if idx >= 0:
+            return idx, self.lines[idx]
         return -1, None
 
     def get_context_lines(

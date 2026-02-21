@@ -27,6 +27,7 @@ from .ui.tray import TrayIcon
 # Intentar importar el detector SMTC como primario (H7)
 try:
     from .detector import MediaDetector
+
     SMTC_AVAILABLE = True
 except Exception:
     SMTC_AVAILABLE = False
@@ -62,7 +63,9 @@ class LetraCancionApp:
         # Estado
         self._current_track: Optional[TrackInfo] = None
         self._running: bool = False
-        self._translation_enabled: bool = self.settings_manager.settings.translation_enabled
+        self._translation_enabled: bool = (
+            self.settings_manager.settings.translation_enabled
+        )
 
         # Qt App
         self.app: Optional[QApplication] = None
@@ -84,6 +87,7 @@ class LetraCancionApp:
             translation_enabled=s.translation_enabled,
             translation_font_size=s.translation_font_size,
             translation_color=s.translation_color,
+            manual_scroll_timeout_s=s.manual_scroll_timeout_s,
         )
 
     async def initialize(self) -> bool:
@@ -149,10 +153,14 @@ class LetraCancionApp:
             self.tray.toggle_translation.connect(self._toggle_translation)
             self.tray.offset_reset.connect(self._reset_offset)
             self.tray.offset_increase.connect(
-                lambda: self._adjust_offset(self.settings_manager.settings.offset_step_ms)
+                lambda: self._adjust_offset(
+                    self.settings_manager.settings.offset_step_ms
+                )
             )
             self.tray.offset_decrease.connect(
-                lambda: self._adjust_offset(-self.settings_manager.settings.offset_step_ms)
+                lambda: self._adjust_offset(
+                    -self.settings_manager.settings.offset_step_ms
+                )
             )
             self.tray.open_settings.connect(self._apply_settings)
             self.tray.quit_app.connect(self._quit)
@@ -409,18 +417,23 @@ class LetraCancionApp:
 
     def _on_sync_time_changed(self, time_ms: int) -> None:
         """Callback cuando el usuario establece manualmente el tiempo de sincronización."""
-        if self.detector and hasattr(self.detector, 'set_position_ms'):
+        if self.detector and hasattr(self.detector, "set_position_ms"):
+            # WindowTitleDetector: ajustar la posición interna del detector
             self.detector.set_position_ms(time_ms)
             logger.info(f"Sincronización manual establecida: {time_ms}ms")
+            # Activar lock temporal para que el auto-sync no sobreescriba
+            if self.sync_engine:
+                self.sync_engine._activate_manual_lock()
+                self.sync_engine._force_sync_update()
         else:
-            # MediaDetector no soporta set_position_ms — calcular offset necesario
-            logger.info(f"Sincronización manual: ajustando offset para posición {time_ms}ms")
-            if self.sync_engine and self.detector:
-                current_pos = self.detector.get_interpolated_position_ms()
-                offset_delta = time_ms - current_pos
-                new_offset = self.sync_engine.adjust_offset(offset_delta)
+            # MediaDetector: usar apply_manual_sync que calcula offset + activa lock
+            logger.info(
+                f"Sincronización manual: ajustando offset para posición {time_ms}ms"
+            )
+            if self.sync_engine:
+                self.sync_engine.apply_manual_sync(time_ms)
                 if self.overlay:
-                    self.overlay.show_offset_indicator(new_offset)
+                    self.overlay.show_offset_indicator(self.sync_engine.offset_ms)
 
     def _quit(self) -> None:
         """Cierra la aplicación de forma segura."""
@@ -506,7 +519,7 @@ class LetraCancionApp:
             )
 
         # Verificar si ya hay música reproduciéndose
-        if hasattr(self.detector, '_check_for_changes'):
+        if hasattr(self.detector, "_check_for_changes"):
             self.detector._check_for_changes()  # Verificación inicial (WindowTitleDetector)
         if self.detector.current_track:
             self._on_track_changed(self.detector.current_track)

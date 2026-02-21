@@ -81,6 +81,8 @@ class OverlayConfig:
     line_height_with_translation: int = 64
     min_visible_lines: int = 3  # Mínimo de líneas visibles
     header_footer_height: int = 80  # Espacio reservado para header y footer
+    # Timeout de scroll manual en segundos (desde settings)
+    manual_scroll_timeout_s: int = 5
 
 
 class LyricLabel(QWidget):
@@ -89,7 +91,9 @@ class LyricLabel(QWidget):
     # Señal emitida cuando se hace clic en la línea (índice real, timestamp_ms)
     line_clicked = pyqtSignal(int, int)
 
-    def __init__(self, config: OverlayConfig, parent=None, is_dual_column: bool = False):
+    def __init__(
+        self, config: OverlayConfig, parent=None, is_dual_column: bool = False
+    ):
         super().__init__(parent)
         self._config = config
         self._is_current = False
@@ -112,14 +116,20 @@ class LyricLabel(QWidget):
         # Label para texto original (Columna izquierda)
         self._original_label = QLabel()
         self._original_label.setWordWrap(True)
-        self._original_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.MinimumExpanding)
+        self._original_label.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.MinimumExpanding
+        )
         layout.addWidget(self._original_label, stretch=1)
 
         # Label para traducción (Columna derecha)
         self._translation_label = QLabel()
-        self._translation_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self._translation_label.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
         self._translation_label.setWordWrap(True)
-        self._translation_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.MinimumExpanding)
+        self._translation_label.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.MinimumExpanding
+        )
         layout.addWidget(self._translation_label, stretch=1)
 
         self.set_dual_column_mode(self._is_dual_column)
@@ -128,12 +138,14 @@ class LyricLabel(QWidget):
     def set_dual_column_mode(self, dual: bool) -> None:
         """Actualiza el modo del label (1 columna o 2 columnas)"""
         self._is_dual_column = dual
-        
+
         if dual:
-            self._original_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self._original_label.setAlignment(
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+            )
         else:
             self._original_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            
+
         self._update_translation_visibility()
 
     def setText(self, text: str) -> None:
@@ -147,7 +159,9 @@ class LyricLabel(QWidget):
             self._translation_label.setText(translation)
         else:
             self._has_translation_data = False
-            self._translation_label.setText("Traduciendo..." if self._is_current else "")
+            self._translation_label.setText(
+                "Traduciendo..." if self._is_current else ""
+            )
 
         self._update_translation_visibility()
         self._update_style()
@@ -166,10 +180,12 @@ class LyricLabel(QWidget):
     def set_current(self, is_current: bool) -> None:
         """Marca esta línea como actual o no."""
         self._is_current = is_current
-        
+
         if not self._has_translation_data:
-            self._translation_label.setText("Traduciendo..." if self._is_current else "")
-            
+            self._translation_label.setText(
+                "Traduciendo..." if self._is_current else ""
+            )
+
         self._update_style()
 
     def set_dim(self, is_dim: bool) -> None:
@@ -231,11 +247,15 @@ class LyricLabel(QWidget):
             """
             )
             self._original_label.setGraphicsEffect(None)
-            
+
             # Traducción más visible cuando es línea actual
             if self._translation_visible and self._is_dual_column:
                 self._translation_label.setGraphicsEffect(None)
-                color = "rgba(255, 255, 255, 0.9)" if self._has_translation_data else "rgba(255, 255, 255, 0.4)"
+                color = (
+                    "rgba(255, 255, 255, 0.9)"
+                    if self._has_translation_data
+                    else "rgba(255, 255, 255, 0.4)"
+                )
                 style = "normal" if self._has_translation_data else "italic"
                 self._translation_label.setStyleSheet(
                     f"""
@@ -266,8 +286,12 @@ class LyricLabel(QWidget):
                 t_blur = QGraphicsBlurEffect()
                 t_blur.setBlurRadius(1.5)
                 self._translation_label.setGraphicsEffect(t_blur)
-                
-                color = "rgba(255, 255, 255, 0.3)" if self._has_translation_data else "rgba(255, 255, 255, 0.15)"
+
+                color = (
+                    "rgba(255, 255, 255, 0.3)"
+                    if self._has_translation_data
+                    else "rgba(255, 255, 255, 0.15)"
+                )
                 style = "normal" if self._has_translation_data else "italic"
                 self._translation_label.setStyleSheet(
                     f"""
@@ -407,6 +431,7 @@ class SyncTimeDialog(QDialog):
     def _is_valid_time(text: str) -> bool:
         """Devuelve True si el texto es un tiempo válido (mm:ss o ss)."""
         import re
+
         text = text.strip()
         if re.match(r"^\d{1,3}:\d{2}$", text):
             parts = text.split(":")
@@ -657,14 +682,16 @@ class LyricsOverlay(QWidget):
         # Área de letras con QScrollArea incrustada para evitar cortes (H8 modificado)
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
-        self.scroll_area.setStyleSheet("QScrollArea { background: transparent; border: none; }")
-        
+        self.scroll_area.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }"
+        )
+
         self.lyrics_container = QWidget()
         self.lyrics_container.setStyleSheet("QWidget { background: transparent; }")
         self.lyrics_layout = QVBoxLayout(self.lyrics_container)
         self.lyrics_layout.setContentsMargins(0, 0, 0, 0)
         self.lyrics_layout.setSpacing(4)
-        
+
         self.scroll_area.setWidget(self.lyrics_container)
 
         # Lista de labels para las líneas (se crean dinámicamente)
@@ -686,14 +713,16 @@ class LyricsOverlay(QWidget):
         self.cover_icon = QLabel("🎵")
         self.cover_icon.setFixedSize(48, 48)
         self.cover_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.cover_icon.setStyleSheet("""
+        self.cover_icon.setStyleSheet(
+            """
             QLabel {
                 background-color: #1ed760;
                 color: #000000;
                 border-radius: 8px;
                 font-size: 24px;
             }
-        """)
+        """
+        )
         footer_layout.addWidget(self.cover_icon)
 
         # Track Info (Title + Artist stacked)
@@ -702,7 +731,9 @@ class LyricsOverlay(QWidget):
         track_info_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
         self.track_title_label = QLabel("Esperando música...")
-        self.track_title_label.setStyleSheet("color: white; font-weight: bold; font-size: 16px;")
+        self.track_title_label.setStyleSheet(
+            "color: white; font-weight: bold; font-size: 16px;"
+        )
         track_info_layout.addWidget(self.track_title_label)
 
         self.track_artist_label = QLabel("-")
@@ -717,13 +748,16 @@ class LyricsOverlay(QWidget):
         progress_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
         self.time_label = QLabel("00:00")
-        self.time_label.setStyleSheet("color: #a0a0a0; font-size: 12px; font-variant-numeric: tabular-nums;")
+        self.time_label.setStyleSheet(
+            "color: #a0a0a0; font-size: 12px; font-variant-numeric: tabular-nums;"
+        )
         progress_layout.addWidget(self.time_label)
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setFixedHeight(4)
         self.progress_bar.setTextVisible(False)
-        self.progress_bar.setStyleSheet("""
+        self.progress_bar.setStyleSheet(
+            """
             QProgressBar {
                 background-color: rgba(255, 255, 255, 0.1);
                 border-radius: 2px;
@@ -732,28 +766,34 @@ class LyricsOverlay(QWidget):
                 background-color: #ffffff;
                 border-radius: 2px;
             }
-        """)
+        """
+        )
         self.progress_bar.setRange(0, 1000)
         self.progress_bar.setValue(0)
         self.progress_bar.setMinimumWidth(100)
         progress_layout.addWidget(self.progress_bar, 1)
 
         self.duration_label = QLabel("00:00")
-        self.duration_label.setStyleSheet("color: #a0a0a0; font-size: 12px; font-variant-numeric: tabular-nums;")
+        self.duration_label.setStyleSheet(
+            "color: #a0a0a0; font-size: 12px; font-variant-numeric: tabular-nums;"
+        )
         progress_layout.addWidget(self.duration_label)
 
-        footer_layout.addLayout(progress_layout, 1) # stretch 1
+        footer_layout.addLayout(progress_layout, 1)  # stretch 1
 
         # Right controls layout
         right_controls = QHBoxLayout()
         right_controls.setSpacing(8)
-        right_controls.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
+        right_controls.setAlignment(
+            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight
+        )
 
         # Botón "↩ Auto"
         self._back_to_auto_btn = QPushButton("↩ Auto")
         self._back_to_auto_btn.setFixedHeight(24)
         self._back_to_auto_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._back_to_auto_btn.setStyleSheet("""
+        self._back_to_auto_btn.setStyleSheet(
+            """
             QPushButton {
                 background-color: rgba(255, 255, 255, 0.1);
                 color: #ffffff;
@@ -766,7 +806,8 @@ class LyricsOverlay(QWidget):
             QPushButton:hover {
                 background-color: rgba(255, 255, 255, 0.2);
             }
-        """)
+        """
+        )
         self._back_to_auto_btn.clicked.connect(self._exit_manual_scroll_mode)
         self._back_to_auto_btn.hide()
         right_controls.addWidget(self._back_to_auto_btn)
@@ -774,7 +815,8 @@ class LyricsOverlay(QWidget):
         # Indicador temporal de offset / traducción
         self.offset_indicator = QLabel()
         self.offset_indicator.setContentsMargins(10, 4, 10, 4)
-        self.offset_indicator.setStyleSheet("""
+        self.offset_indicator.setStyleSheet(
+            """
             QLabel {
                 background-color: rgba(255, 255, 255, 0.1);
                 color: #ffffff;
@@ -782,21 +824,24 @@ class LyricsOverlay(QWidget):
                 font-size: 11px;
                 font-weight: bold;
             }
-        """)
+        """
+        )
         self.offset_indicator.hide()
         right_controls.addWidget(self.offset_indicator)
 
         # Indicador de modo sync
         self.sync_indicator = QLabel()
         self.sync_indicator.setContentsMargins(10, 4, 10, 4)
-        self.sync_indicator.setStyleSheet("""
+        self.sync_indicator.setStyleSheet(
+            """
             QLabel {
                 background-color: rgba(255, 255, 255, 0.1);
                 color: #ffffff;
                 border-radius: 12px;
                 font-size: 11px;
             }
-        """)
+        """
+        )
         self.sync_indicator.hide()
         right_controls.addWidget(self.sync_indicator)
 
@@ -822,9 +867,9 @@ class LyricsOverlay(QWidget):
 
         # Valor estricto más grande si es pantalla maximizada
         if self._is_maximized:
-             base_height = self.config.line_height_with_translation
+            base_height = self.config.line_height_with_translation
         else:
-             base_height = self.config.line_height_without_translation
+            base_height = self.config.line_height_without_translation
 
         # Calcular cuántas líneas caben mínimo
         num_lines = max(self.config.min_visible_lines, available_height // base_height)
@@ -873,7 +918,7 @@ class LyricsOverlay(QWidget):
         Crea o recrea los labels de líneas según la configuración actual.
         """
         self._last_rendered_line_idx = -1  # Invalidar caché de redibujo
-        
+
         # Limpiar labels existentes
         for label in self.line_labels:
             label.line_clicked.disconnect(self._on_line_clicked)
@@ -981,11 +1026,11 @@ class LyricsOverlay(QWidget):
             self.track_title_label.setText("Desconocido")
             self.track_artist_label.setText("-")
             self.header.hide()
-        
+
         # Calcular duración total si hay líneas
         if lyrics.lines:
             last_line = lyrics.lines[-1]
-            total_time_ms = last_line.timestamp_ms + 5000 # 5 segs extra  
+            total_time_ms = last_line.timestamp_ms + 5000  # 5 segs extra
             minutes = total_time_ms // 60000
             seconds = (total_time_ms % 60000) // 1000
             self.duration_label.setText(f"{minutes:02d}:{seconds:02d}")
@@ -1032,11 +1077,13 @@ class LyricsOverlay(QWidget):
             return
 
         # Solo reconstruir el layout de letras si el índice cambió o no hay caché
-        needs_layout_update = getattr(self, "_last_rendered_line_idx", -1) != state.current_line_index
-        
+        needs_layout_update = (
+            getattr(self, "_last_rendered_line_idx", -1) != state.current_line_index
+        )
+
         if needs_layout_update:
             self._last_rendered_line_idx = state.current_line_index
-            
+
             # Obtener líneas de contexto
             context = self._lyrics.get_context_lines(
                 state.current_line_index,
@@ -1069,7 +1116,7 @@ class LyricsOverlay(QWidget):
                         label.setTranslation(line.translation)
                     label.set_current(relative_idx == 0)
                     label.set_dim(relative_idx != 0)
-            
+
             # Trigger layout update prior to scrolling logic (H4 scrolling adjustment)
             self.lyrics_container.adjustSize()
             self._ensure_center_visible(center_idx)
@@ -1083,9 +1130,11 @@ class LyricsOverlay(QWidget):
         minutes = state.position_ms // 60000
         seconds = (state.position_ms % 60000) // 1000
         self.time_label.setText(f"{minutes:02d}:{seconds:02d}")
-        
-        if hasattr(self, 'progress_bar') and self.progress_bar.maximum() > 0:
-            self.progress_bar.setValue(min(state.position_ms, self.progress_bar.maximum()))
+
+        if hasattr(self, "progress_bar") and self.progress_bar.maximum() > 0:
+            self.progress_bar.setValue(
+                min(state.position_ms, self.progress_bar.maximum())
+            )
 
         # Sync mode: solo mostrar temporalmente cuando cambia (H8)
         if self.config.show_sync_mode:
@@ -1093,14 +1142,19 @@ class LyricsOverlay(QWidget):
             if self.config.translation_enabled:
                 mode_text += " 🌐"
             new_mode = mode_text
-            if not hasattr(self, "_last_sync_mode_text") or self._last_sync_mode_text != new_mode:
+            if (
+                not hasattr(self, "_last_sync_mode_text")
+                or self._last_sync_mode_text != new_mode
+            ):
                 self._last_sync_mode_text = new_mode
                 self.sync_indicator.setText(new_mode)
                 # Ocultar después de 3 s
                 if not hasattr(self, "_sync_mode_timer"):
                     self._sync_mode_timer = QTimer()
                     self._sync_mode_timer.setSingleShot(True)
-                    self._sync_mode_timer.timeout.connect(lambda: self.sync_indicator.setText(""))
+                    self._sync_mode_timer.timeout.connect(
+                        lambda: self.sync_indicator.setText("")
+                    )
                 self._sync_mode_timer.start(3000)
 
         # Ocultar botón "Auto" fuera de modo manual
@@ -1112,14 +1166,14 @@ class LyricsOverlay(QWidget):
             target_widget = self.line_labels[center_idx]
             # Usar QTimer simple shot para permitir al layout calcular dimensiones reales primero
             QTimer.singleShot(10, lambda: self._scroll_to_center(target_widget))
-            
+
     def _scroll_to_center(self, target_widget: QWidget) -> None:
         """Aplica el valor del slider vertical para centrar el widget activo"""
         scroll_bar = self.scroll_area.verticalScrollBar()
         widget_y = target_widget.geometry().y()
         widget_h = target_widget.geometry().height()
         view_h = self.scroll_area.viewport().height()
-        
+
         target_scroll = widget_y - (view_h // 2) + (widget_h // 2)
         scroll_bar.setValue(max(0, min(target_scroll, scroll_bar.maximum())))
 
@@ -1145,6 +1199,7 @@ class LyricsOverlay(QWidget):
         """Maneja el click en el botón de maximizar."""
         if not hasattr(self, "geom_anim"):
             from PyQt6.QtCore import QPropertyAnimation, QEasingCurve, QRect
+
             self.geom_anim = QPropertyAnimation(self, b"geometry")
             self.geom_anim.setDuration(400)
             self.geom_anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
@@ -1157,7 +1212,7 @@ class LyricsOverlay(QWidget):
             self.geom_anim.setEndValue(target_rect)
             self._is_maximized = False
             self.max_btn.setText("⬜")
-            
+
             # Restaurar tamaños de fuente compactos
             self.config.font_size = 24
             self.config.translation_font_size = 14
@@ -1172,7 +1227,7 @@ class LyricsOverlay(QWidget):
             target_rect = screen.adjusted(40, 40, -40, -40)
             self.geom_anim.setEndValue(target_rect)
             self._is_maximized = True
-            self.max_btn.setText("🗗") # Icono de restaurar
+            self.max_btn.setText("🗗")  # Icono de restaurar
 
             # Aumentar tamaño de fuentes
             self.config.font_size = 42
@@ -1185,7 +1240,7 @@ class LyricsOverlay(QWidget):
         for label in self.line_labels:
             label.set_dual_column_mode(self._is_maximized)
             label._update_style()
-            
+
         self.geom_anim.start()
 
     def _show_sync_dialog(self) -> None:
@@ -1329,7 +1384,10 @@ class LyricsOverlay(QWidget):
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
         """Maneja el movimiento del mouse."""
         active_buttons = event.buttons()
-        is_dragging = active_buttons in (Qt.MouseButton.LeftButton, Qt.MouseButton.MiddleButton)
+        is_dragging = active_buttons in (
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.MiddleButton,
+        )
 
         if is_dragging:
             if self._resize_edge and self._resize_start_rect:
@@ -1382,7 +1440,7 @@ class LyricsOverlay(QWidget):
         Recalcula el número de líneas visibles dinámicamente.
         """
         super().resizeEvent(event)
-        
+
         # Actualizar layout/columnas solo si el estado cambió
         new_is_dual_column = self._is_maximized
         if new_is_dual_column != self._is_dual_column:
@@ -1441,8 +1499,8 @@ class LyricsOverlay(QWidget):
         # Actualizar visualización con la línea manual
         self._update_manual_display()
 
-        # Reiniciar timer para volver a modo sincronizado (5 segundos)
-        self._manual_scroll_timer.start(5000)
+        # Reiniciar timer para volver a modo sincronizado
+        self._manual_scroll_timer.start(self.config.manual_scroll_timeout_s * 1000)
 
         event.accept()
 
