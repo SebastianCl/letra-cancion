@@ -9,6 +9,7 @@ en un overlay sincronizado.
 import asyncio
 import logging
 import sys
+import threading
 from typing import Optional
 
 from PyQt6.QtWidgets import QApplication, QMessageBox
@@ -66,6 +67,7 @@ class LetraCancionApp:
         self._translation_enabled: bool = (
             self.settings_manager.settings.translation_enabled
         )
+        self._translation_cancel_event: Optional[threading.Event] = None
 
         # Qt App
         self.app: Optional[QApplication] = None
@@ -193,6 +195,11 @@ class LetraCancionApp:
         """Callback cuando cambia la canción."""
         self._current_track = track
 
+        # Cancelar traducción en vuelo de la canción anterior
+        if self._translation_cancel_event is not None:
+            self._translation_cancel_event.set()
+            self._translation_cancel_event = None
+
         if track is None:
             logger.info("No hay canción reproduciéndose")
             self.sync_engine.clear_lyrics()
@@ -249,25 +256,52 @@ class LetraCancionApp:
                 if not result.cached:
                     self.tray.show_lyrics_found(result.provider)
 
-                # Lanzar traducción en segundo plano si está habilitada
+                # Lanzar traducción progresiva en segundo plano si está habilitada
                 if self._translation_enabled and self.translation_service:
 
                     async def translate_and_update():
                         try:
-                            logger.info("Traduciendo letras en segundo plano...")
+                            logger.info("Traducción progresiva en segundo plano...")
                             # H1: Indicador visual de traducción en progreso
                             self.overlay.set_translating()
-                            translated_lyrics = await asyncio.to_thread(
-                                self.translation_service.translate_lyrics, lyrics_data
+
+                            # Crear evento de cancelación para esta traducción
+                            cancel_event = threading.Event()
+                            self._translation_cancel_event = cancel_event
+
+                            # Índice rápido timestamp → line_index
+                            ts_to_idx: dict[int, int] = {
+                                line.timestamp_ms: idx
+                                for idx, line in enumerate(lyrics_data.lines)
+                            }
+
+                            # Callback invocado desde el hilo de traducción por cada línea
+                            loop = asyncio.get_running_loop()
+
+                            def on_line_translated(
+                                line_index: int, timestamp_ms: int, translation: str
+                            ) -> None:
+                                """Inyecta la traducción en la UI desde el hilo principal."""
+                                loop.call_soon_threadsafe(
+                                    self.overlay.update_line_translation,
+                                    line_index,
+                                    translation,
+                                )
+
+                            # Ejecutar traducción progresiva en hilo separado
+                            translation_dict = await asyncio.to_thread(
+                                self.translation_service.translate_lyrics_progressive,
+                                lyrics_data,
+                                on_line_translated,
+                                cancel_event,
                             )
-                            translated_count = sum(
-                                1
-                                for line in translated_lyrics.lines
-                                if getattr(line, "translation", None)
-                            )
-                            logger.info(
-                                f"Traducción completada: {translated_count} líneas traducidas"
-                            )
+
+                            # Verificar cancelación
+                            if cancel_event.is_set():
+                                logger.debug(
+                                    "Traducción cancelada, descartando resultado final"
+                                )
+                                return
 
                             # Verificar que siga siendo el mismo track
                             if (
@@ -279,11 +313,19 @@ class LetraCancionApp:
                                 )
                                 return
 
-                            # Actualizar solo las traducciones en el overlay y sync_engine
-                            self.sync_engine.set_lyrics(
-                                translated_lyrics, duration_ms or 0
+                            translated_count = sum(
+                                1
+                                for line in lyrics_data.lines
+                                if getattr(line, "translation", None)
                             )
-                            self.overlay.set_lyrics(translated_lyrics)
+                            logger.info(
+                                f"Traducción progresiva completada: {translated_count} líneas"
+                            )
+
+                            # Actualizar sync_engine con lyrics ya traducidas in-place
+                            self.sync_engine.set_lyrics(
+                                lyrics_data, duration_ms or 0
+                            )
                             self.overlay.set_translation_done()
                         except Exception as e:
                             logger.warning(f"Error en traducción: {e}")

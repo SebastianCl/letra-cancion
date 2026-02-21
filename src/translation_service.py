@@ -11,8 +11,9 @@ import hashlib
 import json
 import logging
 import re
+import threading
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from deep_translator import GoogleTranslator
 
@@ -290,6 +291,8 @@ class TranslationService:
         """
         self.cache = TranslationCache(cache_dir)
         self._translator: Optional[GoogleTranslator] = None
+        # Caché parcial en memoria: {(artist_lower, title_lower): {timestamp_ms: traducción}}
+        self._partial_cache: dict[tuple[str, str], dict[int, str]] = {}
 
     def _get_translator(
         self, source: str = "en", target: str = "es"
@@ -391,6 +394,156 @@ class TranslationService:
         except Exception as e:
             logger.error(f"Error traduciendo letras: {e}")
             return lyrics
+
+    def _get_partial_cache_key(self, artist: str, title: str) -> tuple[str, str]:
+        """Genera clave para el caché parcial en memoria."""
+        return (artist.lower().strip(), title.lower().strip())
+
+    def translate_lyrics_progressive(
+        self,
+        lyrics: LyricsData,
+        callback: Callable[[int, int, str], None],
+        cancel_event: threading.Event,
+        target_lang: str = "auto",
+        chunk_size: int = 5,
+    ) -> dict[int, str]:
+        """
+        Traduce letras de forma progresiva, notificando vía callback conforme
+        cada bloque se completa.
+
+        Args:
+            lyrics: Datos de letras a traducir.
+            callback: Función (line_index, timestamp_ms, translation) invocada
+                      por cada línea traducida.
+            cancel_event: Si se activa, la traducción se aborta.
+            target_lang: Idioma destino ("auto" para auto-detectar).
+            chunk_size: Número de líneas por bloque de traducción.
+
+        Returns:
+            Dict {timestamp_ms: traducción} con todas las traducciones completadas.
+        """
+        if not lyrics.lines:
+            return {}
+
+        artist = lyrics.artist or "Unknown"
+        title = lyrics.title or "Unknown"
+
+        # --- Recolectar texto y detectar idioma (igual que translate_lyrics) ---
+        all_text = " ".join(line.text for line in lyrics.lines if line.text.strip())
+        source_lang, detected_target = _detect_language(all_text)
+
+        if target_lang != "auto":
+            detected_target = target_lang
+            if detected_target == "es":
+                source_lang = "en"
+            elif detected_target == "en":
+                source_lang = "es"
+
+        logger.info(
+            f"Traducción progresiva: {source_lang}→{detected_target} "
+            f"para: {artist} - {title}"
+        )
+
+        # --- 1. Verificar caché de disco (resultado completo) ---
+        cached_translations = self.cache.get(artist, title, detected_target)
+        if cached_translations:
+            logger.info(f"Cache hit completo (progresivo): {artist} - {title}")
+            for idx, line in enumerate(lyrics.lines):
+                tr = cached_translations.get(line.timestamp_ms)
+                if tr:
+                    if cancel_event.is_set():
+                        return cached_translations
+                    callback(idx, line.timestamp_ms, tr)
+            return cached_translations
+
+        # --- 2. Verificar caché parcial en memoria ---
+        partial_key = self._get_partial_cache_key(artist, title)
+        existing_partial = self._partial_cache.get(partial_key, {})
+
+        # Preparar líneas para traducción (filtrar instrumentales)
+        lines_to_translate: list[tuple[int, LyricLine]] = []
+        for idx, line in enumerate(lyrics.lines):
+            if line.text.strip() and not _is_instrumental_line(line.text):
+                lines_to_translate.append((idx, line))
+
+        if not lines_to_translate:
+            logger.debug("No hay líneas para traducir (progresivo)")
+            return {}
+
+        # Emitir traducciones parciales ya conocidas e identificar pendientes
+        pending: list[tuple[int, LyricLine]] = []
+        translation_dict: dict[int, str] = {}
+
+        for idx, line in lines_to_translate:
+            if cancel_event.is_set():
+                return translation_dict
+            cached_tr = existing_partial.get(line.timestamp_ms)
+            if cached_tr:
+                translation_dict[line.timestamp_ms] = cached_tr
+                callback(idx, line.timestamp_ms, cached_tr)
+            else:
+                pending.append((idx, line))
+
+        if not pending:
+            logger.info(f"Caché parcial completo: {artist} - {title}")
+            # Todas estaban en caché parcial → promover a caché de disco
+            self.cache.save(artist, title, translation_dict, detected_target)
+            return translation_dict
+
+        # --- 3. Traducir pendientes en chunks ---
+        translator = self._get_translator(source=source_lang, target=detected_target)
+
+        # Primer chunk más pequeño para latencia mínima inicial
+        first_chunk_size = min(3, chunk_size)
+        chunks: list[list[tuple[int, LyricLine]]] = []
+        if len(pending) > first_chunk_size:
+            chunks.append(pending[:first_chunk_size])
+            remaining = pending[first_chunk_size:]
+            for i in range(0, len(remaining), chunk_size):
+                chunks.append(remaining[i : i + chunk_size])
+        else:
+            chunks.append(pending)
+
+        for chunk in chunks:
+            if cancel_event.is_set():
+                logger.info("Traducción progresiva cancelada")
+                # Guardar parcial en memoria para reutilización
+                self._partial_cache[partial_key] = translation_dict
+                return translation_dict
+
+            texts = [line.text for _, line in chunk]
+            try:
+                translations = translator.translate_batch(texts)
+                if not translations:
+                    translations = texts  # fallback: texto original
+            except Exception as e:
+                logger.warning(f"Error en chunk translate, fallback uno-por-uno: {e}")
+                translations = []
+                for text in texts:
+                    try:
+                        result = translator.translate(text)
+                        translations.append(result if result else text)
+                    except Exception:
+                        translations.append(text)
+
+            # Emitir resultados del chunk
+            for i, (idx, line) in enumerate(chunk):
+                if cancel_event.is_set():
+                    self._partial_cache[partial_key] = translation_dict
+                    return translation_dict
+                if i < len(translations) and translations[i]:
+                    tr = translations[i]
+                    translation_dict[line.timestamp_ms] = tr
+                    callback(idx, line.timestamp_ms, tr)
+
+        # --- 4. Traducción completa → guardar en caché de disco y limpiar parcial ---
+        self.cache.save(artist, title, translation_dict, detected_target)
+        self._partial_cache.pop(partial_key, None)
+        logger.info(
+            f"Traducción progresiva completada: {len(translation_dict)} líneas "
+            f"para: {artist} - {title}"
+        )
+        return translation_dict
 
     def _batch_translate(
         self,

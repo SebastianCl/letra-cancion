@@ -1046,6 +1046,29 @@ class LyricsOverlay(QWidget):
 
         logger.info(f"Letras cargadas: {len(lyrics.lines)} líneas")
 
+    def update_line_translation(self, line_index: int, translation: str) -> None:
+        """
+        Actualiza la traducción de una línea específica de forma incremental,
+        sin resetear la vista completa.
+
+        Args:
+            line_index: Índice de la línea en self._lyrics.lines.
+            translation: Texto traducido.
+        """
+        if self._lyrics is None or not self._lyrics.lines:
+            return
+        if line_index < 0 or line_index >= len(self._lyrics.lines):
+            return
+
+        # Actualizar el modelo in-place
+        self._lyrics.lines[line_index].translation = translation
+
+        # Si la línea está actualmente visible en los labels, actualizar el widget
+        for label in self.line_labels:
+            if label._real_line_index == line_index:
+                label.setTranslation(translation)
+                break
+
     def update_sync(self, state: SyncState) -> None:
         """
         Actualiza la visualización según el estado de sincronización.
@@ -1111,9 +1134,10 @@ class LyricsOverlay(QWidget):
                     # Establecer información de la línea para sincronización por clic
                     real_index = state.current_line_index + relative_idx
                     label.set_line_info(real_index, line.timestamp_ms)
-                    # Pasar traducción si existe
-                    if hasattr(line, "translation") and line.translation:
-                        label.setTranslation(line.translation)
+                    # Pasar traducción si existe, o cadena vacía para mostrar placeholder
+                    label.setTranslation(
+                        line.translation if hasattr(line, "translation") and line.translation else ""
+                    )
                     label.set_current(relative_idx == 0)
                     label.set_dim(relative_idx != 0)
 
