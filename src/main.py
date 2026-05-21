@@ -13,7 +13,7 @@ import threading
 from typing import Optional
 
 from PyQt6.QtWidgets import QApplication, QMessageBox
-from PyQt6.QtCore import QTimer
+from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 import qasync
 
 from .window_detector import WindowTitleDetector, TrackInfo, PlaybackInfo, PlayerState
@@ -41,6 +41,12 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+
+
+class _AppUiBridge(QObject):
+    """Puente para reenviar acciones externas al hilo principal de Qt."""
+
+    hotkey_triggered = pyqtSignal(object)
 
 
 class LetraCancionApp:
@@ -72,6 +78,8 @@ class LetraCancionApp:
         # Qt App
         self.app: Optional[QApplication] = None
         self.loop: Optional[asyncio.AbstractEventLoop] = None
+        self._ui_bridge = _AppUiBridge()
+        self._ui_bridge.hotkey_triggered.connect(self._handle_hotkey_on_ui_thread)
 
     def _build_overlay_config(self) -> OverlayConfig:
         """Construye OverlayConfig desde la configuración persistente."""
@@ -368,7 +376,11 @@ class LetraCancionApp:
             self.overlay.update_sync(state)
 
     def _on_hotkey(self, action: HotkeyAction) -> None:
-        """Callback cuando se activa un hotkey."""
+        """Callback cuando se activa un hotkey desde un hilo externo."""
+        self._ui_bridge.hotkey_triggered.emit(action)
+
+    def _handle_hotkey_on_ui_thread(self, action: HotkeyAction) -> None:
+        """Procesa acciones de hotkeys de forma segura en el hilo de Qt."""
         logger.debug(f"Hotkey: {action.value}")
 
         if action == HotkeyAction.TOGGLE_OVERLAY:
