@@ -10,13 +10,14 @@ import asyncio
 import logging
 import sys
 import threading
-from typing import Optional
+from typing import Any, Optional
 
 from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 import qasync
 
-from .window_detector import WindowTitleDetector, TrackInfo, PlaybackInfo, PlayerState
+from .window_detector import WindowTitleDetector
+from .models import TrackInfo, PlaybackInfo, PlayerState
 from .lyrics_service import LyricsService, LyricsSearchResult
 from .translation_service import TranslationService
 from .sync_engine import SyncEngine, SyncState, SyncMode
@@ -56,7 +57,7 @@ class LetraCancionApp:
 
     def __init__(self):
         # Componentes
-        self.detector: Optional[WindowTitleDetector] = None
+        self.detector: Any = None
         self.lyrics_service: Optional[LyricsService] = None
         self.translation_service: Optional[TranslationService] = None
         self.sync_engine: Optional[SyncEngine] = None
@@ -362,9 +363,8 @@ class LetraCancionApp:
         logger.debug(f"Playback: {playback.state.name}")
 
         # Pausar/reanudar el sync engine según el estado de reproducción
-        # Comparamos por nombre para compatibilidad entre los enums de detector.py y window_detector.py
         if self.sync_engine:
-            if playback.state.name == "PLAYING":
+            if playback.state == PlayerState.PLAYING:
                 self.sync_engine.resume()
             else:
                 self.sync_engine.pause()

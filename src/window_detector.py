@@ -10,56 +10,14 @@ Formato típico de Qobuz: "Título - Artista"
 import ctypes
 import logging
 from ctypes import wintypes
-from dataclasses import dataclass
 from datetime import datetime
-from enum import Enum
 from typing import Callable, Optional
 import asyncio
 
 logger = logging.getLogger(__name__)
 
 
-class PlayerState(Enum):
-    """Estado del reproductor."""
-
-    STOPPED = 0
-    PLAYING = 1
-    UNKNOWN = 2
-
-
-@dataclass
-class TrackInfo:
-    """Información de la canción actual."""
-
-    title: str
-    artist: str
-    album: str = ""
-
-    def __str__(self) -> str:
-        return f"{self.artist} - {self.title}"
-
-    def matches(self, other: "TrackInfo") -> bool:
-        """Compara si dos TrackInfo son la misma canción."""
-        if other is None:
-            return False
-        return (
-            self.title.lower() == other.title.lower()
-            and self.artist.lower() == other.artist.lower()
-        )
-
-
-@dataclass
-class PlaybackInfo:
-    """Información del estado de reproducción."""
-
-    state: PlayerState
-    position_ms: int = 0
-    duration_ms: int = 0
-    last_updated: datetime = None
-
-    def __post_init__(self):
-        if self.last_updated is None:
-            self.last_updated = datetime.now()
+from .models import TrackInfo, PlaybackInfo, PlayerState
 
 
 # Type aliases para callbacks

@@ -7,9 +7,7 @@ como Qobuz, Spotify, etc.
 """
 
 import asyncio
-from dataclasses import dataclass
 from datetime import datetime, timedelta
-from enum import Enum
 from typing import Callable, Optional
 import logging
 
@@ -33,62 +31,7 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
-class PlayerState(Enum):
-    """Estado del reproductor."""
-
-    CLOSED = 0
-    OPENED = 1
-    CHANGING = 2
-    STOPPED = 3
-    PLAYING = 4
-    PAUSED = 5
-
-
-@dataclass
-class TrackInfo:
-    """Información de la canción actual."""
-
-    title: str
-    artist: str
-    album: str
-    album_artist: str
-    track_number: int
-    genres: list[str]
-
-    def __str__(self) -> str:
-        return f"{self.artist} - {self.title}"
-
-    def matches(self, other: "TrackInfo") -> bool:
-        """Compara si dos TrackInfo son la misma canción."""
-        return (
-            self.title == other.title
-            and self.artist == other.artist
-            and self.album == other.album
-        )
-
-
-@dataclass
-class PlaybackInfo:
-    """Información del estado de reproducción."""
-
-    state: PlayerState
-    position_ms: int
-    duration_ms: int
-    last_updated: datetime
-
-    @property
-    def position_seconds(self) -> float:
-        return self.position_ms / 1000.0
-
-    @property
-    def duration_seconds(self) -> float:
-        return self.duration_ms / 1000.0
-
-    @property
-    def progress_percent(self) -> float:
-        if self.duration_ms == 0:
-            return 0.0
-        return (self.position_ms / self.duration_ms) * 100
+from .models import TrackInfo, PlaybackInfo, PlayerState
 
 
 # Type aliases para callbacks

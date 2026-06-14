@@ -697,8 +697,9 @@ class LyricsOverlay(QWidget):
         # Lista de labels para las líneas (se crean dinámicamente)
         self.line_labels: list[LyricLabel] = []
 
-        # Crear labels iniciales
-        self._create_line_labels()
+        # Crear labels iniciales (se reciclan en resize via _ensure_line_labels)
+        initial_count = self.config.lines_before + 1 + self.config.lines_after
+        self._ensure_line_labels(initial_count)
 
         container_layout.addWidget(
             self.scroll_area, 1
@@ -883,7 +884,7 @@ class LyricsOverlay(QWidget):
     def _recalculate_visible_lines(self) -> None:
         """
         Recalcula y actualiza el número de líneas visibles según el tamaño de la ventana.
-        Recrea los labels si es necesario.
+        Recicla los labels existentes en lugar de recrearlos.
         """
         new_total_lines = self._calculate_visible_lines()
 
@@ -900,8 +901,8 @@ class LyricsOverlay(QWidget):
                 f"({context_lines} antes, 1 actual, {context_lines} después)"
             )
 
-            # Recrear los labels
-            self._create_line_labels()
+            # Ajustar cantidad de labels (recicla existentes)
+            self._ensure_line_labels(new_total_lines)
 
             # Re-aplicar estado si tenemos letras cargadas
             if self._lyrics is not None:
@@ -913,29 +914,38 @@ class LyricsOverlay(QWidget):
                     # Crear un estado temporal para refrescar
                     self._refresh_current_display()
 
-    def _create_line_labels(self) -> None:
+    def _ensure_line_labels(self, target_count: int) -> None:
         """
-        Crea o recrea los labels de líneas según la configuración actual.
+        Asegura que existan exactamente target_count labels, reciclando
+        los existentes para evitar destruir/recrear widgets en cada resize.
         """
         self._last_rendered_line_idx = -1  # Invalidar caché de redibujo
+        current = len(self.line_labels)
 
-        # Limpiar labels existentes
+        if target_count < current:
+            # Remover extras del final
+            for label in self.line_labels[target_count:]:
+                label.line_clicked.disconnect(self._on_line_clicked)
+                self.lyrics_layout.removeWidget(label)
+                label.deleteLater()
+            self.line_labels = self.line_labels[:target_count]
+            logger.debug(
+                f"Labels reducidos: {current} → {target_count}"
+            )
+        elif target_count > current:
+            # Agregar nuevos labels al final
+            for _ in range(current, target_count):
+                label = LyricLabel(self.config, is_dual_column=self._is_dual_column)
+                label.line_clicked.connect(self._on_line_clicked)
+                self.line_labels.append(label)
+                self.lyrics_layout.addWidget(label)
+            logger.debug(
+                f"Labels extendidos: {current} → {target_count}"
+            )
+
+        # Actualizar modo de columnas en todos los labels
         for label in self.line_labels:
-            label.line_clicked.disconnect(self._on_line_clicked)
-            self.lyrics_layout.removeWidget(label)
-            label.deleteLater()
-        self.line_labels.clear()
-
-        # Crear nuevos labels
-        total_lines = self.config.lines_before + 1 + self.config.lines_after
-
-        for i in range(total_lines):
-            label = LyricLabel(self.config, is_dual_column=self._is_dual_column)
-            label.line_clicked.connect(self._on_line_clicked)
-            self.line_labels.append(label)
-            self.lyrics_layout.addWidget(label)
-
-        logger.debug(f"Creados {total_lines} labels de línea")
+            label.set_dual_column_mode(self._is_dual_column)
 
     def _refresh_current_display(self) -> None:
         """

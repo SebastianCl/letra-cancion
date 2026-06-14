@@ -14,12 +14,12 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from PyQt6.QtCore import QTimer
 
 from .lrc_parser import LyricsData, LyricLine
-from .window_detector import WindowTitleDetector, PlayerState, PlaybackInfo, TrackInfo
+from .models import PlayerState, PlaybackInfo, TrackInfo
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +62,7 @@ class SyncEngine:
     MAX_OFFSET_MS = 10000  # +10 segundos
     OFFSET_STEP_MS = 500  # Paso de ajuste: 500ms
 
-    def __init__(self, detector: WindowTitleDetector):
+    def __init__(self, detector: Any):
         """
         Inicializa el motor de sincronización.
 

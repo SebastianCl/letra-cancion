@@ -422,7 +422,7 @@ class LyricsService:
             title: Título de la canción
             album: Nombre del álbum (opcional)
             duration_ms: Duración en milisegundos (opcional)
-            prefer_synced: Si True, solo acepta letras sincronizadas en primera pasada
+            prefer_synced: Si True, prioriza letras sincronizadas
 
         Returns:
             LyricsSearchResult si se encontró, None si no.
@@ -434,7 +434,6 @@ class LyricsService:
         # 1. Buscar en caché
         cached = self.cache.get(artist, title)
         if cached:
-            # Si preferimos sincronizadas y el caché tiene sincronizadas, usar
             if not prefer_synced or cached.is_synced:
                 return LyricsSearchResult(
                     lyrics_data=cached, provider="cache", cached=True
@@ -442,6 +441,7 @@ class LyricsService:
 
         # 2. Buscar en proveedores
         duration_seconds = duration_ms // 1000 if duration_ms else None
+        plain_fallback: Optional[tuple[str, LyricsData]] = None
 
         for provider_name, provider in self._providers:
             try:
@@ -455,11 +455,14 @@ class LyricsService:
                 )
 
                 if result:
-                    # Verificar si cumple preferencia de sincronización
+                    # Si preferimos sincronizadas y el resultado es plano,
+                    # guardarlo como fallback y continuar buscando sincronizadas
                     if prefer_synced and not result.is_synced:
-                        logger.debug(
-                            f"{provider_name}: encontró solo letra plana, continuando..."
-                        )
+                        if plain_fallback is None:
+                            plain_fallback = (provider_name, result)
+                            logger.debug(
+                                f"{provider_name}: guardando letra plana como fallback"
+                            )
                         continue
 
                     # Guardar en caché
@@ -474,18 +477,39 @@ class LyricsService:
 
             except Exception as e:
                 logger.warning(f"Error en proveedor {provider_name}: {e}")
-                continue
 
-        # 3. Segunda pasada: aceptar letras planas si prefer_synced estaba activo
-        if prefer_synced:
-            logger.debug("No se encontraron letras sincronizadas, buscando planas...")
-            return await self.search(
-                artist=artist,
-                title=title,
-                album=album,
-                duration_ms=duration_ms,
-                prefer_synced=False,
+        # 3. Usar fallback plano si prefer_synced estaba activo
+        if prefer_synced and plain_fallback:
+            provider_name, result = plain_fallback
+            self.cache.save(artist, title, result)
+            logger.info(
+                f"Usando letra plana de {provider_name} para: {artist} - {title}"
             )
+            return LyricsSearchResult(
+                lyrics_data=result, provider=provider_name, cached=False
+            )
+
+        # 4. Segunda pasada aceptando cualquier tipo (solo si no hubo ningún resultado)
+        if prefer_synced and plain_fallback is None:
+            logger.debug("No se encontraron resultados, reintentando sin preferencia...")
+            for provider_name, provider in self._providers:
+                try:
+                    result = await provider.search(
+                        artist=artist,
+                        title=title,
+                        album=album,
+                        duration_seconds=duration_seconds,
+                    )
+                    if result:
+                        self.cache.save(artist, title, result)
+                        logger.info(
+                            f"Letras encontradas en {provider_name} para: {artist} - {title}"
+                        )
+                        return LyricsSearchResult(
+                            lyrics_data=result, provider=provider_name, cached=False
+                        )
+                except Exception as e:
+                    logger.warning(f"Error en proveedor {provider_name}: {e}")
 
         logger.info(f"No se encontraron letras para: {artist} - {title}")
         return None

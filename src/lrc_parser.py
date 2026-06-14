@@ -49,6 +49,10 @@ class LyricsData:
     offset_ms: int = 0  # Offset global en ms
     is_synced: bool = True  # True si tiene timestamps
 
+    def __post_init__(self) -> None:
+        """Construye caché de timestamps para búsqueda binaria rápida."""
+        self._timestamps: list[int] = [line.timestamp_ms for line in self.lines]
+
     @property
     def duration_ms(self) -> int:
         """Duración estimada basada en el último timestamp."""
@@ -72,10 +76,9 @@ class LyricsData:
         if not self.lines:
             return -1, None
 
-        # Búsqueda binaria: encontrar la última línea con timestamp <= position_ms
-        # Construimos las claves de búsqueda a partir de los timestamps
-        timestamps = [line.timestamp_ms for line in self.lines]
-        idx = bisect_right(timestamps, position_ms) - 1
+        # Búsqueda binaria sobre la caché de timestamps
+        # (evita reconstruir la lista en cada llamada)
+        idx = bisect_right(self._timestamps, position_ms) - 1
 
         if idx >= 0:
             return idx, self.lines[idx]
