@@ -11,12 +11,14 @@ Incluye caché local para evitar consultas repetidas.
 import asyncio
 import hashlib
 import logging
+import ssl
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 from urllib.parse import quote
 
 import aiohttp
+import certifi
 
 from .lrc_parser import LRCParser, LyricsData
 
@@ -150,8 +152,13 @@ class LRCLIBProvider:
 
     BASE_URL = "https://lrclib.net/api"
 
-    def __init__(self, session: aiohttp.ClientSession):
+    def __init__(
+        self,
+        session: aiohttp.ClientSession,
+        ssl_context: Optional[ssl.SSLContext] = None,
+    ):
         self.session = session
+        self.ssl_context = ssl_context
 
     async def search(
         self,
@@ -187,6 +194,7 @@ class LRCLIBProvider:
                 f"{self.BASE_URL}/get",
                 params=params,
                 timeout=aiohttp.ClientTimeout(total=10),
+                ssl=self.ssl_context,
             ) as response:
                 if response.status == 200:
                     data = await response.json()
@@ -203,6 +211,7 @@ class LRCLIBProvider:
                 f"{self.BASE_URL}/search",
                 params={"q": search_query},
                 timeout=aiohttp.ClientTimeout(total=10),
+                ssl=self.ssl_context,
             ) as response:
                 if response.status == 200:
                     results = await response.json()
@@ -296,7 +305,7 @@ class NetEaseProvider:
                 if response.status != 200:
                     return None
 
-                result = await response.json()
+                result = await response.json(content_type=None)
                 songs = result.get("result", {}).get("songs", [])
 
                 if not songs:
@@ -348,7 +357,7 @@ class NetEaseProvider:
                 if response.status != 200:
                     return None
 
-                result = await response.json()
+                result = await response.json(content_type=None)
 
                 # Intentar obtener letras sincronizadas
                 lrc_data = result.get("lrc", {})
@@ -387,11 +396,18 @@ class LyricsService:
 
     async def initialize(self) -> None:
         """Inicializa la sesión HTTP y los proveedores."""
-        self._session = aiohttp.ClientSession()
+        self._session = aiohttp.ClientSession(
+            headers={
+                "User-Agent": "LetraCancion/1.0 (personal desktop lyrics client)"
+            }
+        )
+
+        # Usar un bundle CA actualizado sin desactivar la validación TLS.
+        lrclib_ssl_context = ssl.create_default_context(cafile=certifi.where())
 
         # Configurar proveedores en orden de prioridad
         self._providers = [
-            ("LRCLIB", LRCLIBProvider(self._session)),
+            ("LRCLIB", LRCLIBProvider(self._session, lrclib_ssl_context)),
             ("NetEase", NetEaseProvider(self._session)),
         ]
 

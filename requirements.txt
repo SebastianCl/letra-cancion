@@ -4,6 +4,9 @@ winsdk>=1.0.0b10
 # HTTP async para APIs de letras
 aiohttp>=3.9.0
 
+# Autoridades certificadoras actualizadas para HTTPS
+certifi>=2024.2.2
+
 # UI - Overlay y System Tray
 PyQt6>=6.6.0
 
