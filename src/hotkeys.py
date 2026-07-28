@@ -4,11 +4,11 @@ Gestor de hotkeys globales usando la librería 'keyboard'.
 Más simple y confiable en Windows que pynput.
 
 Hotkeys configurados:
-- Ctrl+Shift+L: Toggle visibilidad del overlay
+- Ctrl+Shift+L: Toggle visibilidad de la ventana
 - Ctrl+Alt+Up: Aumentar offset (+500ms)
 - Ctrl+Alt+Down: Disminuir offset (-500ms)
 - Ctrl+Alt+R: Resetear offset a 0
-- Ctrl+Shift+M: Modo mover overlay (drag)
+- Ctrl+Shift+M: Modo mover ventana (drag)
 """
 
 import logging
@@ -62,7 +62,7 @@ class HotkeyManager:
     # Hotkeys por defecto
     DEFAULT_HOTKEYS = [
         HotkeyConfig(
-            HotkeyAction.TOGGLE_OVERLAY, "ctrl+shift+l", "Mostrar/ocultar overlay"
+            HotkeyAction.TOGGLE_OVERLAY, "ctrl+shift+l", "Mostrar/ocultar ventana"
         ),
         HotkeyConfig(
             HotkeyAction.TOGGLE_TRANSLATION, "ctrl+t", "Activar/desactivar traducción"

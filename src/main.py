@@ -3,7 +3,7 @@ Letra Canción - Aplicación principal
 
 Sistema de letras sincronizadas para Qobuz.
 Detecta la música reproduciéndose, obtiene letras y las muestra
-en un overlay sincronizado.
+en una ventana inmersiva sincronizada.
 """
 
 import asyncio
@@ -25,6 +25,7 @@ from .hotkeys import HotkeyManager, HotkeyAction, KEYBOARD_AVAILABLE
 from .settings import SettingsManager
 from .ui.overlay import LyricsOverlay, OverlayConfig
 from .ui.tray import TrayIcon
+from .ui.brand import create_brand_icon
 
 # Intentar importar el detector SMTC como primario (H7)
 try:
@@ -90,6 +91,7 @@ class LetraCancionApp:
             height=s.overlay_height,
             opacity=s.opacity,
             font_size=s.font_size,
+            highlight_font_size=s.highlight_font_size,
             font_family=s.font_family,
             bg_color=s.bg_color,
             text_color=s.text_color,
@@ -99,6 +101,8 @@ class LetraCancionApp:
             translation_font_size=s.translation_font_size,
             translation_color=s.translation_color,
             manual_scroll_timeout_s=s.manual_scroll_timeout_s,
+            always_on_top=s.always_on_top,
+            window_maximized=s.window_maximized,
         )
 
     async def initialize(self) -> bool:
@@ -165,14 +169,20 @@ class LetraCancionApp:
             self.overlay = LyricsOverlay(self._build_overlay_config())
             self.tray = TrayIcon(settings=self.settings_manager.settings)
 
-            # Restaurar posición del overlay si fue guardada (H7)
+            # Restaurar geometría únicamente si todavía intersecta una pantalla.
             s = self.settings_manager.settings
-            if s.overlay_x >= 0 and s.overlay_y >= 0:
-                self.overlay.move(s.overlay_x, s.overlay_y)
+            self.overlay.restore_window_state(
+                s.overlay_x,
+                s.overlay_y,
+                s.overlay_width,
+                s.overlay_height,
+                s.window_maximized,
+            )
 
             # Conectar signals del tray
             self.tray.toggle_overlay.connect(self._toggle_overlay)
             self.tray.toggle_translation.connect(self._toggle_translation)
+            self.tray.toggle_always_on_top.connect(self._toggle_always_on_top)
             self.tray.offset_reset.connect(self._reset_offset)
             self.tray.offset_increase.connect(
                 lambda: self._adjust_offset(
@@ -190,6 +200,8 @@ class LetraCancionApp:
             # Conectar signals del overlay
             self.overlay.sync_time_changed.connect(self._on_sync_time_changed)
             self.overlay.quit_requested.connect(self._quit)
+            self.overlay.closed.connect(self._on_overlay_closed)
+            self.tray.set_always_on_top(s.always_on_top)
 
             # 5. Inicializar hotkeys
             logger.info("Inicializando hotkeys...")
@@ -272,7 +284,7 @@ class LetraCancionApp:
 
                 # Mostrar letra original inmediatamente
                 self.sync_engine.set_lyrics(lyrics_data, duration_ms or 0)
-                self.overlay.set_lyrics(lyrics_data)
+                self.overlay.set_lyrics(lyrics_data, duration_ms or 0)
                 if not result.cached:
                     self.tray.show_lyrics_found(result.provider)
 
@@ -373,6 +385,9 @@ class LetraCancionApp:
         """Callback cuando cambia el estado de reproducción."""
         logger.debug(f"Playback: {playback.state.name}")
 
+        if self.overlay:
+            self.overlay.update_playback(playback)
+
         # Pausar/reanudar el sync engine según el estado de reproducción
         if self.sync_engine:
             if playback.state == PlayerState.PLAYING:
@@ -421,6 +436,22 @@ class LetraCancionApp:
             self.tray.set_overlay_visible(visible)
             logger.info(f"Overlay {'visible' if visible else 'oculto'}")
 
+    def _on_overlay_closed(self) -> None:
+        """Sincroniza la bandeja cuando el botón cerrar oculta la ventana."""
+        if self.tray:
+            self.tray.set_overlay_visible(False)
+
+    def _toggle_always_on_top(self) -> None:
+        """Alterna y persiste el modo flotante de la ventana."""
+        if not self.overlay:
+            return
+        enabled = not self.settings_manager.settings.always_on_top
+        self.settings_manager.settings.always_on_top = enabled
+        self.overlay.set_always_on_top(enabled)
+        if self.tray:
+            self.tray.set_always_on_top(enabled)
+        self.settings_manager.save()
+
     def _toggle_translation(self) -> None:
         """Alterna la visibilidad de las traducciones."""
         if self.overlay:
@@ -440,29 +471,13 @@ class LetraCancionApp:
         s = self.settings_manager.settings
         self._translation_enabled = s.translation_enabled
 
-        # Reconstruir config del overlay
+        # Aplicar configuración visual y de ventana.
         if self.overlay:
-            self.overlay.config.opacity = s.opacity
-            self.overlay.config.font_size = s.font_size
-            self.overlay.config.translation_font_size = s.translation_font_size
-            self.overlay.config.translation_enabled = s.translation_enabled
-            # Refrescar estilos del container
-            self.overlay.container.setStyleSheet(
-                f"""
-                QFrame#container {{
-                    background-color: rgba(26, 26, 46, {int(s.opacity * 255)});
-                    border-radius: 15px;
-                    border: 1px solid rgba(255, 255, 255, 0.1);
-                }}
-            """
-            )
-            # Actualizar labels de traducción
-            for label in self.overlay.line_labels:
-                label.set_translation_visible(s.translation_enabled)
-            self.overlay._recalculate_visible_lines()
+            self.overlay.apply_config(self._build_overlay_config())
 
         if self.tray:
             self.tray.set_translation_enabled(s.translation_enabled)
+            self.tray.set_always_on_top(s.always_on_top)
 
         logger.info("Configuración aplicada")
 
@@ -505,15 +520,15 @@ class LetraCancionApp:
         logger.info("Cerrando aplicación...")
         self._running = False
 
-        # H7: Guardar posición y tamaño del overlay antes de cerrar
+        # Guardar geometría y estado de ventana antes de cerrar.
         if self.overlay:
-            pos = self.overlay.pos()
-            size = self.overlay.size()
+            geometry = self.overlay.persisted_geometry()
             s = self.settings_manager.settings
-            s.overlay_x = pos.x()
-            s.overlay_y = pos.y()
-            s.overlay_width = size.width()
-            s.overlay_height = size.height()
+            s.overlay_x = geometry.x()
+            s.overlay_y = geometry.y()
+            s.overlay_width = geometry.width()
+            s.overlay_height = geometry.height()
+            s.window_maximized = self.overlay.isMaximized()
             self.settings_manager.save()
 
         # Detener componentes primero
@@ -524,7 +539,7 @@ class LetraCancionApp:
                 self.hotkey_manager.stop()
             if self.overlay:
                 self.overlay.hide()
-                self.overlay.close()
+                self.overlay.force_close()
             if self.tray:
                 self.tray.hide()
         except Exception as e:
@@ -561,12 +576,13 @@ class LetraCancionApp:
         s = self.settings_manager.settings
         if s.first_run:
             self.tray.show_notification(
-                "Letras Sincronizadas",
+                "Letra Canción",
                 "¡Bienvenido! La aplicación está lista.\n\n"
-                "• Ctrl+Shift+L: mostrar/ocultar overlay\n"
+                "• Ctrl+Shift+L: mostrar/ocultar ventana\n"
                 "• Ctrl+T: activar/desactivar traducción\n"
-                "• Arrastra el header para mover la ventana\n"
+                "• Arrastra la barra superior para mover la ventana\n"
                 "• Click derecho: ajustar sincronización\n"
+                "• Cerrar oculta la ventana en la bandeja\n"
                 "• Menú del tray: Configuración y Ayuda",
                 duration_ms=10000,
             )
@@ -576,7 +592,7 @@ class LetraCancionApp:
         else:
             # Notificación de inicio estándar
             self.tray.show_notification(
-                "Letras Sincronizadas",
+                "Letra Canción",
                 "Aplicación iniciada.\n"
                 "Ctrl+Shift+L para mostrar/ocultar.\n"
                 "Clic derecho en el icono para más opciones.",
@@ -629,12 +645,13 @@ class LetraCancionApp:
 
 def main():
     """Punto de entrada principal."""
-    logger.info("🎵 Letras Sincronizadas para Qobuz — Iniciando...")
+    logger.info("Letra Canción para Qobuz — Iniciando...")
 
     # Crear aplicación Qt
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)  # Mantener corriendo con solo el tray
-    app.setApplicationName("Letras Sincronizadas")
+    app.setApplicationName("Letra Canción")
+    app.setWindowIcon(create_brand_icon())
 
     # Crear event loop con qasync
     loop = qasync.QEventLoop(app)

@@ -6,13 +6,13 @@ para controlar la aplicación.
 """
 
 import logging
-from typing import Callable, Optional
-from pathlib import Path
+from typing import Optional
 
 from PyQt6.QtWidgets import QSystemTrayIcon, QMenu, QApplication
-from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor, QFont, QAction
+from PyQt6.QtGui import QIcon, QAction
 from PyQt6.QtCore import pyqtSignal, QObject
 
+from .brand import create_brand_icon
 from .settings import SettingsDialog, HelpDialog
 from ..settings import AppSettings
 
@@ -37,6 +37,7 @@ class TrayIcon(QObject):
     hide_overlay = pyqtSignal()
     toggle_overlay = pyqtSignal()
     toggle_translation = pyqtSignal()
+    toggle_always_on_top = pyqtSignal()
     offset_reset = pyqtSignal()
     offset_increase = pyqtSignal()
     offset_decrease = pyqtSignal()
@@ -51,6 +52,7 @@ class TrayIcon(QObject):
         self._menu: Optional[QMenu] = None
         self._overlay_visible: bool = True
         self._translation_enabled: bool = True
+        self._always_on_top: bool = bool(settings.always_on_top) if settings else False
 
         # Info actual de la canción
         self._current_track: str = "Sin reproducción"
@@ -58,34 +60,8 @@ class TrayIcon(QObject):
         self._setup_tray()
 
     def _create_icon(self) -> QIcon:
-        """
-        Crea el icono para el tray.
-
-        Genera un icono simple con el símbolo ♪
-        """
-        # Crear pixmap
-        size = 64
-        pixmap = QPixmap(size, size)
-        pixmap.fill(QColor(0, 0, 0, 0))  # Transparente
-
-        # Dibujar
-        painter = QPainter(pixmap)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-
-        # Círculo de fondo
-        painter.setBrush(QColor(0, 212, 255))  # Cyan
-        painter.setPen(QColor(0, 0, 0, 0))
-        painter.drawEllipse(4, 4, size - 8, size - 8)
-
-        # Símbolo de música
-        painter.setPen(QColor(255, 255, 255))
-        font = QFont("Segoe UI", 28, QFont.Weight.Bold)
-        painter.setFont(font)
-        painter.drawText(pixmap.rect(), 0x0084, "♪")  # AlignCenter
-
-        painter.end()
-
-        return QIcon(pixmap)
+        """Crea el icono vectorial compartido con la ventana."""
+        return create_brand_icon()
 
     def _setup_tray(self) -> None:
         """Configura el icono del tray y el menú."""
@@ -94,6 +70,18 @@ class TrayIcon(QObject):
 
         # Crear menú
         self._menu = QMenu()
+        self._menu.setStyleSheet(
+            """
+            QMenu {
+                background:#0b1028; color:#ececff;
+                border:1px solid rgba(139,92,246,0.28);
+                border-radius:8px; padding:6px;
+            }
+            QMenu::item { padding:7px 22px 7px 10px; border-radius:5px; }
+            QMenu::item:selected { background:rgba(139,92,246,0.24); }
+            QMenu::separator { height:1px; background:#242b50; margin:5px 8px; }
+            """
+        )
 
         # --- Acciones del menú ---
 
@@ -105,17 +93,24 @@ class TrayIcon(QObject):
         self._menu.addSeparator()
 
         # Toggle overlay
-        self._toggle_action = QAction("👁 Ocultar letras")
+        self._toggle_action = QAction("Ocultar ventana")
         self._toggle_action.triggered.connect(self._on_toggle_clicked)
         self._menu.addAction(self._toggle_action)
 
         # Toggle traducción (H6: hacer visible, antes solo Ctrl+T invisible)
-        self._translation_action = QAction("🌐 Traducción: Activada")
+        self._translation_action = QAction("Traducción: activada")
         self._translation_action.triggered.connect(self._on_translation_toggled)
         self._menu.addAction(self._translation_action)
 
+        self._always_on_top_action = QAction()
+        self._always_on_top_action.triggered.connect(
+            lambda: self.toggle_always_on_top.emit()
+        )
+        self._menu.addAction(self._always_on_top_action)
+        self.set_always_on_top(self._always_on_top)
+
         # Submenú de sincronización (H2: lenguaje natural)
-        sync_menu = self._menu.addMenu("⏱ Sincronización")
+        sync_menu = self._menu.addMenu("Sincronización")
 
         offset_up_action = QAction("⏩ Letras van adelantadas (+500ms)")
         offset_up_action.triggered.connect(lambda: self.offset_increase.emit())
@@ -134,19 +129,19 @@ class TrayIcon(QObject):
         self._menu.addSeparator()
 
         # Configuración (H7)
-        settings_action = QAction("⚙ Configuración")
+        settings_action = QAction("Configuración")
         settings_action.triggered.connect(self._show_settings)
         self._menu.addAction(settings_action)
 
         # Ayuda (H10)
-        help_action = QAction("❓ Ayuda")
+        help_action = QAction("Ayuda")
         help_action.triggered.connect(self._show_help)
         self._menu.addAction(help_action)
 
         self._menu.addSeparator()
 
         # Salir
-        quit_action = QAction("❌ Salir")
+        quit_action = QAction("Salir de Letra Canción")
         quit_action.triggered.connect(lambda: self.quit_app.emit())
         self._menu.addAction(quit_action)
 
@@ -154,7 +149,7 @@ class TrayIcon(QObject):
         self._tray.setContextMenu(self._menu)
 
         # Tooltip
-        self._tray.setToolTip("Letras Sincronizadas\nClic derecho para opciones")
+        self._tray.setToolTip("Letra Canción\nClic derecho para opciones")
 
         # Conectar click en el icono
         self._tray.activated.connect(self._on_tray_activated)
@@ -232,7 +227,7 @@ class TrayIcon(QObject):
             self._track_action.setText(f"🎵 {display_text}")
 
         if self._tray:
-            self._tray.setToolTip(f"Letras Sincronizadas\n{self._current_track}")
+            self._tray.setToolTip(f"Letra Canción\n{self._current_track}")
 
     def clear_track_info(self) -> None:
         """Limpia la información del track."""
@@ -242,7 +237,7 @@ class TrayIcon(QObject):
             self._track_action.setText("🎵 Sin reproducción")
 
         if self._tray:
-            self._tray.setToolTip("Letras Sincronizadas\nClic derecho para opciones")
+            self._tray.setToolTip("Letra Canción\nClic derecho para opciones")
 
     def set_overlay_visible(self, visible: bool) -> None:
         """
@@ -254,18 +249,26 @@ class TrayIcon(QObject):
         self._overlay_visible = visible
         if self._toggle_action:
             if visible:
-                self._toggle_action.setText("👁 Ocultar letras")
+                self._toggle_action.setText("Ocultar ventana")
             else:
-                self._toggle_action.setText("👁 Mostrar letras")
+                self._toggle_action.setText("Mostrar ventana")
 
     def set_translation_enabled(self, enabled: bool) -> None:
         """Actualiza el estado de traducción en el menú (H6)."""
         self._translation_enabled = enabled
         if self._translation_action:
             if enabled:
-                self._translation_action.setText("🌐 Traducción: Activada")
+                self._translation_action.setText("Traducción: activada")
             else:
-                self._translation_action.setText("🌐 Traducción: Desactivada")
+                self._translation_action.setText("Traducción: desactivada")
+
+    def set_always_on_top(self, enabled: bool) -> None:
+        """Sincroniza la preferencia de ventana flotante en el menú."""
+        self._always_on_top = enabled
+        if hasattr(self, "_always_on_top_action"):
+            self._always_on_top_action.setText(
+                "Siempre encima: activado" if enabled else "Siempre encima: desactivado"
+            )
 
     def show_notification(
         self,
@@ -340,7 +343,7 @@ def main():
 
     # Mostrar notificación
     tray.show_notification(
-        "Letras Sincronizadas",
+        "Letra Canción",
         "Aplicación iniciada.\nClic derecho para opciones.",
         QSystemTrayIcon.MessageIcon.Information,
         5000,

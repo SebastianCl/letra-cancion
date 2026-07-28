@@ -30,6 +30,7 @@ PKGINFO
 # PyInstaller
 *.manifest
 *.spec
+!app.spec
 
 # Installer logs
 pip-log.txt
