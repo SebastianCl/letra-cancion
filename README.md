@@ -17,13 +17,15 @@ Detecta automáticamente la canción que estás reproduciendo en Qobuz, busca la
 - **Caché local** para evitar búsquedas repetidas
 - **Persistencia** de posición, tamaño y preferencias del overlay
 
-## 🚀 Instalación
+## 🚀 Instalación y ejecución
 
 ### Requisitos
 
 - Windows 10/11
 - Python 3.10+
 - Qobuz Desktop App
+
+La aplicación web de Qobuz no expone la información multimedia necesaria para la detección automática.
 
 ### Pasos
 
@@ -41,6 +43,16 @@ python -m venv .venv
 pip install -r requirements.txt
 python -m src.main
 ```
+
+## 📦 Ejecutable distribuible
+
+Para generar una versión empaquetada con PyInstaller, ejecuta:
+
+```powershell
+.\build.ps1
+```
+
+El ejecutable se crea en `dist\LetraCancion\LetraCancion.exe`.
 
 ## ⌨️ Atajos de teclado
 
@@ -101,6 +113,8 @@ Opciones disponibles:
 
 La configuración se guarda automáticamente en `~/.lyrics-cache/settings.json`.
 
+Las letras traducidas y las respuestas reutilizables también se almacenan localmente en `~/.lyrics-cache/`; no deben confirmarse en Git.
+
 ### Ajuste de sincronización
 
 Si la letra aparece adelantada o atrasada:
@@ -125,6 +139,7 @@ Si no se encuentra letra sincronizada, se muestra la letra plana con scroll auto
 - **Requiere Qobuz Desktop**: La app web no expone información al sistema
 - **Cobertura de letras**: No todas las canciones tienen letras disponibles
 - **Precisión**: La sincronización depende de la calidad de los datos de LRCLIB
+- Las consultas de letras y traducción requieren conexión a Internet
 
 ## 🔒 Uso Personal
 
@@ -153,3 +168,14 @@ Este proyecto está diseñado para **uso personal**. Las letras se obtienen de f
 ## 📄 Licencia
 
 Proyecto de uso personal. Las letras pertenecen a sus respectivos autores.
+
+
+## 🧪 Desarrollo y verificación
+
+Comprobación rápida de sintaxis e importaciones:
+
+```powershell
+python -m compileall src launcher.py
+```
+
+Actualmente no hay una suite automatizada configurada. Para cambios de lógica, añade pruebas específicas en `tests/` con `pytest`, simulando las APIs externas y los servicios de Windows.
