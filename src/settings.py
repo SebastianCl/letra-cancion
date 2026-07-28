@@ -7,7 +7,7 @@ Provee valores por defecto y validación.
 
 import json
 import logging
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -15,29 +15,36 @@ logger = logging.getLogger(__name__)
 
 # Ruta por defecto del archivo de configuración
 DEFAULT_SETTINGS_PATH = Path.home() / ".lyrics-cache" / "settings.json"
+CURRENT_DESIGN_VERSION = 2
 
 
 @dataclass
 class AppSettings:
     """Configuración completa de la aplicación."""
 
-    # --- Apariencia ---
-    opacity: float = 0.85
-    font_size: int = 18
-    highlight_font_size: int = 20
-    translation_font_size: int = 14
-    font_family: str = "Segoe UI"
-    bg_color: str = "#1a1a2e"
-    text_color: str = "#ffffff"
-    highlight_color: str = "#00d4ff"
-    dim_color: str = "#666666"
-    translation_color: str = "#aaaaaa"
+    # --- Versión de interfaz ---
+    design_version: int = CURRENT_DESIGN_VERSION
 
-    # --- Tamaño y posición del overlay ---
-    overlay_width: int = 600
-    overlay_height: int = 280
+    # --- Apariencia ---
+    opacity: float = 1.0
+    font_size: int = 24
+    highlight_font_size: int = 48
+    translation_font_size: int = 18
+    font_family: str = "Segoe UI Variable, Segoe UI"
+    bg_color: str = "#080b1d"
+    text_color: str = "#ffffff"
+    highlight_color: str = "#ffffff"
+    dim_color: str = "#3f4762"
+    translation_color: str = "#8b5cf6"
+
+    # --- Tamaño y posición de la ventana ---
+    # 0 = calcular automáticamente a partir de la pantalla disponible.
+    overlay_width: int = 0
+    overlay_height: int = 0
     overlay_x: int = -1  # -1 = centrado automático
-    overlay_y: int = -1  # -1 = inferior automático
+    overlay_y: int = -1  # -1 = centrado automático
+    window_maximized: bool = False
+    always_on_top: bool = False
 
     # --- Comportamiento ---
     translation_enabled: bool = True
@@ -50,12 +57,15 @@ class AppSettings:
 
     def validate(self) -> None:
         """Valida y corrige valores fuera de rango."""
-        self.opacity = max(0.3, min(1.0, self.opacity))
-        self.font_size = max(10, min(32, self.font_size))
-        self.highlight_font_size = max(12, min(36, self.highlight_font_size))
-        self.translation_font_size = max(8, min(24, self.translation_font_size))
-        self.overlay_width = max(300, min(1600, self.overlay_width))
-        self.overlay_height = max(100, min(900, self.overlay_height))
+        self.design_version = CURRENT_DESIGN_VERSION
+        self.opacity = max(0.65, min(1.0, self.opacity))
+        self.font_size = max(16, min(32, self.font_size))
+        self.highlight_font_size = max(32, min(64, self.highlight_font_size))
+        self.translation_font_size = max(12, min(28, self.translation_font_size))
+        if self.overlay_width != 0:
+            self.overlay_width = max(900, min(1920, self.overlay_width))
+        if self.overlay_height != 0:
+            self.overlay_height = max(600, min(1200, self.overlay_height))
         self.manual_scroll_timeout_s = max(2, min(30, self.manual_scroll_timeout_s))
         self.offset_step_ms = max(100, min(2000, self.offset_step_ms))
 
@@ -84,6 +94,8 @@ class SettingsManager:
 
         try:
             data = json.loads(self._path.read_text(encoding="utf-8"))
+            if int(data.get("design_version", 1)) < CURRENT_DESIGN_VERSION:
+                data = self._migrate_legacy_settings(data)
             # Aplicar solo los campos conocidos
             for key, value in data.items():
                 if hasattr(self._settings, key):
@@ -93,6 +105,29 @@ class SettingsManager:
         except Exception as e:
             logger.warning(f"Error cargando configuración: {e}. Usando valores por defecto.")
             self._settings = AppSettings()
+
+    @staticmethod
+    def _migrate_legacy_settings(data: dict) -> dict:
+        """
+        Migra la interfaz compacta anterior al diseño inmersivo.
+
+        Se conservan preferencias de comportamiento y onboarding, pero se
+        reinician geometría y apariencia para que valores antiguos no rompan
+        el nuevo layout.
+        """
+        migrated = asdict(AppSettings())
+        for key in (
+            "translation_enabled",
+            "manual_scroll_timeout_s",
+            "offset_step_ms",
+            "first_run",
+            "onboarding_shown",
+        ):
+            if key in data:
+                migrated[key] = data[key]
+        migrated["design_version"] = CURRENT_DESIGN_VERSION
+        logger.info("Configuración visual migrada al diseño v2")
+        return migrated
 
     def save(self) -> None:
         """Guarda la configuración actual en disco."""

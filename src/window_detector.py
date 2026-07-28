@@ -8,58 +8,17 @@ Formato típico de Qobuz: "Título - Artista"
 """
 
 import ctypes
+import os
 import logging
 from ctypes import wintypes
-from dataclasses import dataclass
 from datetime import datetime
-from enum import Enum
 from typing import Callable, Optional
 import asyncio
 
 logger = logging.getLogger(__name__)
 
 
-class PlayerState(Enum):
-    """Estado del reproductor."""
-
-    STOPPED = 0
-    PLAYING = 1
-    UNKNOWN = 2
-
-
-@dataclass
-class TrackInfo:
-    """Información de la canción actual."""
-
-    title: str
-    artist: str
-    album: str = ""
-
-    def __str__(self) -> str:
-        return f"{self.artist} - {self.title}"
-
-    def matches(self, other: "TrackInfo") -> bool:
-        """Compara si dos TrackInfo son la misma canción."""
-        if other is None:
-            return False
-        return (
-            self.title.lower() == other.title.lower()
-            and self.artist.lower() == other.artist.lower()
-        )
-
-
-@dataclass
-class PlaybackInfo:
-    """Información del estado de reproducción."""
-
-    state: PlayerState
-    position_ms: int = 0
-    duration_ms: int = 0
-    last_updated: datetime = None
-
-    def __post_init__(self):
-        if self.last_updated is None:
-            self.last_updated = datetime.now()
+from .models import TrackInfo, PlaybackInfo, PlayerState
 
 
 # Type aliases para callbacks
@@ -126,21 +85,31 @@ class WindowTitleDetector:
 
         # Windows API
         self._user32 = ctypes.windll.user32
+        self._kernel32 = ctypes.windll.kernel32
+        self._kernel32.OpenProcess.argtypes = [
+            wintypes.DWORD,
+            wintypes.BOOL,
+            wintypes.DWORD,
+        ]
+        self._kernel32.OpenProcess.restype = wintypes.HANDLE
+        self._kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        self._kernel32.CloseHandle.restype = wintypes.BOOL
+        self._kernel32.QueryFullProcessImageNameW.argtypes = [
+            wintypes.HANDLE,
+            wintypes.DWORD,
+            wintypes.LPWSTR,
+            ctypes.POINTER(wintypes.DWORD),
+        ]
+        self._kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
 
     async def initialize(self) -> bool:
         """Inicializa el detector."""
         logger.info("WindowTitleDetector inicializado")
         return True
 
-    def _get_qobuz_window_title(self) -> Optional[str]:
-        """
-        Busca la ventana de Qobuz y retorna su título.
-
-        Returns:
-            Título de la ventana o None si no se encuentra.
-        """
-        qobuz_windows = []
-        other_windows = []
+    def _enumerate_visible_windows(self) -> list[tuple[int, str]]:
+        """Enumera handles y títulos de las ventanas visibles."""
+        windows: list[tuple[int, str]] = []
 
         def enum_callback(hwnd, _):
             if self._user32.IsWindowVisible(hwnd):
@@ -148,56 +117,46 @@ class WindowTitleDetector:
                 if length > 0:
                     buff = ctypes.create_unicode_buffer(length + 1)
                     self._user32.GetWindowTextW(hwnd, buff, length + 1)
-                    title = buff.value
-                    title_lower = title.lower()
-
-                    # Ignorar títulos específicos que NO son música
-                    ignore_apps = [
-                        "visual studio",
-                        "chrome",
-                        "firefox",
-                        "edge",
-                        "explorer",
-                        "powershell",
-                        "cmd",
-                        "terminal",
-                        "copilot",
-                        "github",
-                        "cursor",
-                    ]
-                    if any(skip in title_lower for skip in ignore_apps):
-                        return True
-
-                    # Ventanas que contienen "qobuz" son prioritarias
-                    if "qobuz" in title_lower:
-                        # Si tiene el formato "Canción - Artista", es música
-                        if " - " in title and title_lower not in self.IGNORE_TITLES:
-                            qobuz_windows.insert(0, title)  # Prioridad alta
-                        else:
-                            # Es Qobuz pero sin canción (pausa, navegación, etc.)
-                            qobuz_windows.append(("qobuz_idle", title))
-                    elif " - " in title:
-                        # Otras ventanas con formato "X - Y"
-                        if title_lower not in self.IGNORE_TITLES:
-                            other_windows.append(title)
+                    windows.append((int(hwnd), buff.value))
             return True
 
         WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
         self._user32.EnumWindows(WNDENUMPROC(enum_callback), 0)
+        return windows
 
-        # Prioridad 1: Ventana de Qobuz con canción
-        for item in qobuz_windows:
-            if isinstance(item, str):  # Es un título con canción
-                return item
-
-        # Si solo encontramos Qobuz idle (sin canción), retornar None
-        # pero NO borrar el track actual (la canción podría estar pausada)
-        if qobuz_windows:
+    def _get_window_process_name(self, hwnd: int) -> Optional[str]:
+        """Obtiene el nombre del ejecutable propietario de una ventana."""
+        process_id = wintypes.DWORD()
+        self._user32.GetWindowThreadProcessId(hwnd, ctypes.byref(process_id))
+        if not process_id.value:
             return None
 
-        # Prioridad 2: Otras ventanas (para otros reproductores)
-        for title in other_windows:
-            return title
+        process_handle = self._kernel32.OpenProcess(
+            0x1000, False, process_id.value  # PROCESS_QUERY_LIMITED_INFORMATION
+        )
+        if not process_handle:
+            return None
+
+        try:
+            size = wintypes.DWORD(32768)
+            path_buffer = ctypes.create_unicode_buffer(size.value)
+            if not self._kernel32.QueryFullProcessImageNameW(
+                process_handle, 0, path_buffer, ctypes.byref(size)
+            ):
+                return None
+            return os.path.basename(path_buffer.value).lower()
+        finally:
+            self._kernel32.CloseHandle(process_handle)
+
+    def _get_qobuz_window_title(self) -> Optional[str]:
+        """Retorna el título musical de una ventana propiedad de Qobuz.exe."""
+        for hwnd, title in self._enumerate_visible_windows():
+            if self._get_window_process_name(hwnd) != "qobuz.exe":
+                continue
+
+            title_lower = title.strip().lower()
+            if " - " in title and title_lower not in self.IGNORE_TITLES:
+                return title
 
         return None
 

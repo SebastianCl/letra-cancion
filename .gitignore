@@ -30,6 +30,7 @@ PKGINFO
 # PyInstaller
 *.manifest
 *.spec
+!app.spec
 
 # Installer logs
 pip-log.txt
@@ -132,3 +133,6 @@ dmypy.json
 # OS
 .DS_Store
 Thumbs.db
+
+#Agent
+graphify-out

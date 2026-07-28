@@ -7,10 +7,8 @@ como Qobuz, Spotify, etc.
 """
 
 import asyncio
-from dataclasses import dataclass
 from datetime import datetime, timedelta
-from enum import Enum
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 import logging
 
 # Windows SDK imports
@@ -33,62 +31,7 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
-class PlayerState(Enum):
-    """Estado del reproductor."""
-
-    CLOSED = 0
-    OPENED = 1
-    CHANGING = 2
-    STOPPED = 3
-    PLAYING = 4
-    PAUSED = 5
-
-
-@dataclass
-class TrackInfo:
-    """Información de la canción actual."""
-
-    title: str
-    artist: str
-    album: str
-    album_artist: str
-    track_number: int
-    genres: list[str]
-
-    def __str__(self) -> str:
-        return f"{self.artist} - {self.title}"
-
-    def matches(self, other: "TrackInfo") -> bool:
-        """Compara si dos TrackInfo son la misma canción."""
-        return (
-            self.title == other.title
-            and self.artist == other.artist
-            and self.album == other.album
-        )
-
-
-@dataclass
-class PlaybackInfo:
-    """Información del estado de reproducción."""
-
-    state: PlayerState
-    position_ms: int
-    duration_ms: int
-    last_updated: datetime
-
-    @property
-    def position_seconds(self) -> float:
-        return self.position_ms / 1000.0
-
-    @property
-    def duration_seconds(self) -> float:
-        return self.duration_ms / 1000.0
-
-    @property
-    def progress_percent(self) -> float:
-        if self.duration_ms == 0:
-            return 0.0
-        return (self.position_ms / self.duration_ms) * 100
+from .models import TrackInfo, PlaybackInfo, PlayerState
 
 
 # Type aliases para callbacks
@@ -121,6 +64,13 @@ class MediaDetector:
         self.target_app = target_app
         self._manager: Optional[MediaManager] = None
         self._current_session: Optional[MediaSession] = None
+
+        # Tokens de eventos WinRT para liberar los handlers correctamente.
+        self._manager_current_session_token: Optional[Any] = None
+        self._manager_sessions_token: Optional[Any] = None
+        self._session_media_token: Optional[Any] = None
+        self._session_playback_token: Optional[Any] = None
+        self._session_timeline_token: Optional[Any] = None
 
         # Estado actual
         self._current_track: Optional[TrackInfo] = None
@@ -160,13 +110,23 @@ class MediaDetector:
                 logger.error("No se pudo obtener el MediaManager")
                 return False
 
-            # Obtener sesión actual
-            await self._update_current_session()
-
-            # Registrar callback para cambios de sesión
-            self._manager.add_current_session_changed(
+            # Escuchar cambios de sesión actual y altas/bajas de sesiones.
+            self._manager_current_session_token = (
+                self._manager.add_current_session_changed(
+                    lambda sender, args: self._schedule_async(
+                        self._on_session_changed()
+                    )
+                )
+            )
+            self._manager_sessions_token = self._manager.add_sessions_changed(
                 lambda sender, args: self._schedule_async(self._on_session_changed())
             )
+
+            await self._update_current_session()
+
+            if self._current_session is None:
+                logger.warning("No se encontró una sesión multimedia de Qobuz")
+                return False
 
             logger.info("MediaDetector inicializado correctamente")
             return True
@@ -180,43 +140,40 @@ class MediaDetector:
         if self._manager is None:
             return
 
-        # Obtener sesión actual
-        session = self._manager.get_current_session()
+        session = None
+        sessions = self._manager.get_sessions()
 
-        if session is None:
-            # Intentar obtener de las sesiones disponibles
-            sessions = self._manager.get_sessions()
-            if sessions and sessions.size > 0:
-                # Buscar sesión que coincida con target_app
-                for i in range(sessions.size):
-                    s = sessions.get_at(i)
-                    source_id = s.source_app_user_model_id
-                    if (
-                        self.target_app is None
-                        or self.target_app.lower() in source_id.lower()
-                    ):
-                        session = s
-                        break
+        # Con una app objetivo, nunca aceptar una sesión de otra aplicación.
+        if sessions:
+            for i in range(sessions.size):
+                candidate = sessions.get_at(i)
+                source_id = candidate.source_app_user_model_id or ""
+                if (
+                    self.target_app is None
+                    or self.target_app.lower() in source_id.lower()
+                ):
+                    session = candidate
+                    break
 
-                # Si no encontramos target, usar la primera
-                if session is None and sessions.size > 0:
-                    session = sessions.get_at(0)
+        if self.target_app is None and session is None:
+            session = self._manager.get_current_session()
 
         if session != self._current_session:
+            self._remove_session_handlers()
             self._current_session = session
             if session:
                 logger.info(f"Sesión activa: {session.source_app_user_model_id}")
 
                 # Registrar callbacks de la sesión (se disparan desde hilos WinRT)
-                session.add_media_properties_changed(
+                self._session_media_token = session.add_media_properties_changed(
                     lambda s, a: self._schedule_async(
                         self._on_media_properties_changed()
                     )
                 )
-                session.add_playback_info_changed(
+                self._session_playback_token = session.add_playback_info_changed(
                     lambda s, a: self._schedule_async(self._on_playback_info_changed())
                 )
-                session.add_timeline_properties_changed(
+                self._session_timeline_token = session.add_timeline_properties_changed(
                     lambda s, a: self._schedule_async(
                         self._on_timeline_properties_changed()
                     )
@@ -225,6 +182,33 @@ class MediaDetector:
                 # Obtener info inicial
                 await self._update_track_info()
                 await self._update_playback_info()
+            else:
+                self._current_playback = None
+                if self._current_track is not None:
+                    self._current_track = None
+                    self._notify_track_changed(None)
+
+    def _remove_session_handlers(self) -> None:
+        """Desregistra los eventos asociados a la sesión seleccionada."""
+        if self._current_session is None:
+            return
+
+        handlers = (
+            ("remove_media_properties_changed", self._session_media_token),
+            ("remove_playback_info_changed", self._session_playback_token),
+            ("remove_timeline_properties_changed", self._session_timeline_token),
+        )
+        for remover_name, token in handlers:
+            if token is None:
+                continue
+            try:
+                getattr(self._current_session, remover_name)(token)
+            except Exception as e:
+                logger.debug(f"No se pudo liberar {remover_name}: {e}")
+
+        self._session_media_token = None
+        self._session_playback_token = None
+        self._session_timeline_token = None
 
     async def _on_session_changed(self) -> None:
         """Callback cuando cambia la sesión activa."""
@@ -490,8 +474,27 @@ class MediaDetector:
     async def close(self) -> None:
         """Cierra el detector y libera recursos."""
         self.stop_polling()
+        self._remove_session_handlers()
         self._current_session = None
+
+        if self._manager is not None:
+            if self._manager_current_session_token is not None:
+                try:
+                    self._manager.remove_current_session_changed(
+                        self._manager_current_session_token
+                    )
+                except Exception as e:
+                    logger.debug(f"No se pudo liberar current_session_changed: {e}")
+            if self._manager_sessions_token is not None:
+                try:
+                    self._manager.remove_sessions_changed(self._manager_sessions_token)
+                except Exception as e:
+                    logger.debug(f"No se pudo liberar sessions_changed: {e}")
+
+        self._manager_current_session_token = None
+        self._manager_sessions_token = None
         self._manager = None
+        self._loop = None
         logger.info("MediaDetector cerrado")
 
 

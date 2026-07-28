@@ -14,12 +14,12 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from PyQt6.QtCore import QTimer
 
 from .lrc_parser import LyricsData, LyricLine
-from .window_detector import WindowTitleDetector, PlayerState, PlaybackInfo, TrackInfo
+from .models import PlayerState, PlaybackInfo, TrackInfo
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +62,7 @@ class SyncEngine:
     MAX_OFFSET_MS = 10000  # +10 segundos
     OFFSET_STEP_MS = 500  # Paso de ajuste: 500ms
 
-    def __init__(self, detector: WindowTitleDetector):
+    def __init__(self, detector: Any):
         """
         Inicializa el motor de sincronización.
 
@@ -267,35 +267,32 @@ class SyncEngine:
         # Determinar línea actual
         line_idx, current_line = self._get_line_at_position(position_ms)
 
-        # Solo notificar si cambió la línea
-        if line_idx != self._current_line_index:
-            # Protección anti-regresión: evitar que la línea retroceda brevemente
-            # cuando SMTC reporta una posición ligeramente menor que la interpolada.
-            # Solo bloquear retrocesos de 1 línea — retrocesos mayores (seek) sí se aplican.
-            if (
-                line_idx >= 0
-                and self._current_line_index >= 0
-                and line_idx == self._current_line_index - 1
-                and is_playing
-            ):
-                # Retroceso de 1 línea durante reproducción = probable micro-corrección SMTC
-                # Ignorar para evitar flicker
-                return
+        # Protección anti-regresión: evitar que la línea retroceda brevemente
+        # cuando SMTC reporta una posición ligeramente menor que la interpolada.
+        # Solo bloquear retrocesos de 1 línea — retrocesos mayores (seek) sí se aplican.
+        if (
+            line_idx != self._current_line_index
+            and line_idx >= 0
+            and self._current_line_index >= 0
+            and line_idx == self._current_line_index - 1
+            and is_playing
+        ):
+            line_idx = self._current_line_index
+            current_line = self._lyrics.lines[line_idx]
 
-            self._current_line_index = line_idx
+        self._current_line_index = line_idx
 
-            # Crear estado de sincronización
-            state = SyncState(
-                mode=self._mode,
-                current_line_index=line_idx,
-                current_line=current_line,
-                position_ms=position_ms,
-                is_playing=is_playing,
-                offset_ms=self._offset_ms,
-            )
-
-            # Notificar a los listeners
-            self._notify_sync_update(state)
+        # Publicar cada tick permite actualizar una barra de progreso fluida.
+        # La vista recicla sus widgets y solo reconstruye texto al cambiar de línea.
+        state = SyncState(
+            mode=self._mode,
+            current_line_index=line_idx,
+            current_line=current_line,
+            position_ms=position_ms,
+            is_playing=is_playing,
+            offset_ms=self._offset_ms,
+        )
+        self._notify_sync_update(state)
 
     def _force_sync_update(self) -> None:
         """

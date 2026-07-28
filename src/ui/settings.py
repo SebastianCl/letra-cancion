@@ -24,7 +24,6 @@ from PyQt6.QtWidgets import (
     QTextBrowser,
 )
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QFont
 
 from ..settings import AppSettings
 
@@ -34,20 +33,20 @@ logger = logging.getLogger(__name__)
 # ── Estilos compartidos ────────────────────────────────────────────────────
 _DARK_STYLE = """
     QDialog, QTabWidget::pane, QWidget {
-        background-color: #1a1a2e;
+        background-color: #0b1028;
         color: #ffffff;
     }
     QTabBar::tab {
-        background: #2a2a4e;
-        color: #aaa;
+        background: #111735;
+        color: #aeb5cf;
         padding: 8px 18px;
         border-top-left-radius: 6px;
         border-top-right-radius: 6px;
         margin-right: 2px;
     }
     QTabBar::tab:selected {
-        background: #1a1a2e;
-        color: #00d4ff;
+        background: #0b1028;
+        color: #a78bfa;
         font-weight: bold;
     }
     QGroupBox {
@@ -55,7 +54,7 @@ _DARK_STYLE = """
         border-radius: 8px;
         margin-top: 14px;
         padding-top: 18px;
-        color: #00d4ff;
+        color: #a78bfa;
         font-weight: bold;
     }
     QGroupBox::title {
@@ -64,30 +63,30 @@ _DARK_STYLE = """
     }
     QLabel { color: #ddd; font-size: 13px; }
     QSlider::groove:horizontal {
-        height: 6px; background: #333; border-radius: 3px;
+        height: 6px; background: #242b50; border-radius: 3px;
     }
     QSlider::handle:horizontal {
-        background: #00d4ff; width: 16px; margin: -5px 0;
+        background: #8b5cf6; width: 16px; margin: -5px 0;
         border-radius: 8px;
     }
-    QSlider::sub-page:horizontal { background: #00d4ff; border-radius: 3px; }
+    QSlider::sub-page:horizontal { background: #8b5cf6; border-radius: 3px; }
     QCheckBox { color: #ddd; font-size: 13px; spacing: 6px; }
     QCheckBox::indicator { width: 18px; height: 18px; }
-    QCheckBox::indicator:unchecked { border: 2px solid #555; border-radius: 4px; background: #2a2a4e; }
-    QCheckBox::indicator:checked  { border: 2px solid #00d4ff; border-radius: 4px; background: #00d4ff; }
+    QCheckBox::indicator:unchecked { border: 2px solid #4b557f; border-radius: 4px; background: #111735; }
+    QCheckBox::indicator:checked  { border: 2px solid #8b5cf6; border-radius: 4px; background: #8b5cf6; }
     QComboBox {
-        background: #2a2a4e; color: white; border: 1px solid #555;
+        background: #111735; color: white; border: 1px solid #4b557f;
         border-radius: 5px; padding: 4px 8px;
     }
     QComboBox::drop-down { border: none; }
-    QComboBox QAbstractItemView { background: #2a2a4e; color: white; selection-background-color: #00d4ff; }
+    QComboBox QAbstractItemView { background: #111735; color: white; selection-background-color: #8b5cf6; }
     QPushButton {
-        background-color: #00d4ff; color: #1a1a2e;
+        background-color: #8b5cf6; color: #ffffff;
         border: none; border-radius: 6px; padding: 8px 20px;
         font-weight: bold; font-size: 13px;
     }
-    QPushButton:hover { background-color: #00a8cc; }
-    QPushButton:pressed { background-color: #008899; }
+    QPushButton:hover { background-color: #9f7aea; }
+    QPushButton:pressed { background-color: #6d4bd6; }
     QPushButton#cancelBtn, QPushButton#resetBtn {
         background-color: #444; color: white;
     }
@@ -105,7 +104,7 @@ class SettingsDialog(QDialog):
     def __init__(self, settings: AppSettings, parent=None):
         super().__init__(parent)
         self._settings = settings
-        self.setWindowTitle("⚙ Configuración — Letras Sincronizadas")
+        self.setWindowTitle("Configuración — Letra Canción")
         self.setMinimumSize(440, 480)
         self.setWindowFlags(
             Qt.WindowType.Dialog | Qt.WindowType.WindowStaysOnTopHint
@@ -130,7 +129,7 @@ class SettingsDialog(QDialog):
         g_opacity = QGroupBox("Opacidad del fondo")
         gl = QFormLayout(g_opacity)
         self._opacity_slider = QSlider(Qt.Orientation.Horizontal)
-        self._opacity_slider.setRange(30, 100)
+        self._opacity_slider.setRange(65, 100)
         self._opacity_label = QLabel()
         self._opacity_slider.valueChanged.connect(
             lambda v: self._opacity_label.setText(f"{v}%")
@@ -143,7 +142,7 @@ class SettingsDialog(QDialog):
         fl = QFormLayout(g_font)
 
         self._font_slider = QSlider(Qt.Orientation.Horizontal)
-        self._font_slider.setRange(10, 32)
+        self._font_slider.setRange(16, 32)
         self._font_label = QLabel()
         self._font_slider.valueChanged.connect(
             lambda v: self._font_label.setText(f"{v}px")
@@ -152,7 +151,7 @@ class SettingsDialog(QDialog):
         fl.addRow("", self._font_label)
 
         self._highlight_slider = QSlider(Qt.Orientation.Horizontal)
-        self._highlight_slider.setRange(12, 36)
+        self._highlight_slider.setRange(32, 64)
         self._hl_label = QLabel()
         self._highlight_slider.valueChanged.connect(
             lambda v: self._hl_label.setText(f"{v}px")
@@ -161,7 +160,7 @@ class SettingsDialog(QDialog):
         fl.addRow("", self._hl_label)
 
         self._trans_font_slider = QSlider(Qt.Orientation.Horizontal)
-        self._trans_font_slider.setRange(8, 24)
+        self._trans_font_slider.setRange(12, 28)
         self._tf_label = QLabel()
         self._trans_font_slider.valueChanged.connect(
             lambda v: self._tf_label.setText(f"{v}px")
@@ -200,6 +199,12 @@ class SettingsDialog(QDialog):
         self._trans_check = QCheckBox("Traducir letras automáticamente")
         tl.addRow(self._trans_check)
         blay.addWidget(g_trans)
+
+        g_window = QGroupBox("Ventana")
+        wl = QFormLayout(g_window)
+        self._always_on_top_check = QCheckBox("Mantener Letra Canción siempre encima")
+        wl.addRow(self._always_on_top_check)
+        blay.addWidget(g_window)
 
         blay.addStretch()
         tabs.addTab(behavior, "⚙ Comportamiento")
@@ -242,6 +247,7 @@ class SettingsDialog(QDialog):
 
         self._scroll_slider.setValue(s.manual_scroll_timeout_s)
         self._trans_check.setChecked(s.translation_enabled)
+        self._always_on_top_check.setChecked(s.always_on_top)
 
     def _on_save(self) -> None:
         s = self._settings
@@ -252,6 +258,7 @@ class SettingsDialog(QDialog):
         s.offset_step_ms = self._offset_combo.currentData()
         s.manual_scroll_timeout_s = self._scroll_slider.value()
         s.translation_enabled = self._trans_check.isChecked()
+        s.always_on_top = self._always_on_top_check.isChecked()
         s.validate()
         self.settings_changed.emit()
         self.accept()
@@ -268,6 +275,7 @@ class SettingsDialog(QDialog):
             self._offset_combo.setCurrentIndex(idx)
         self._scroll_slider.setValue(defaults.manual_scroll_timeout_s)
         self._trans_check.setChecked(defaults.translation_enabled)
+        self._always_on_top_check.setChecked(defaults.always_on_top)
 
 
 class HelpDialog(QDialog):
@@ -275,7 +283,7 @@ class HelpDialog(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("❓ Ayuda — Letras Sincronizadas")
+        self.setWindowTitle("Ayuda — Letra Canción")
         self.setMinimumSize(460, 420)
         self.setWindowFlags(
             Qt.WindowType.Dialog | Qt.WindowType.WindowStaysOnTopHint
@@ -289,7 +297,7 @@ class HelpDialog(QDialog):
         browser = QTextBrowser()
         browser.setOpenExternalLinks(False)
         browser.setStyleSheet(
-            "QTextBrowser { background: #1a1a2e; color: #ddd; border: none; font-size: 13px; }"
+            "QTextBrowser { background: #0b1028; color: #ddd; border: none; font-size: 13px; }"
         )
         browser.setHtml(_HELP_HTML)
         layout.addWidget(browser, 1)
@@ -300,48 +308,36 @@ class HelpDialog(QDialog):
 
 
 _HELP_HTML = """
-<h2 style="color:#00d4ff;">⌨️ Atajos de teclado</h2>
+<h2 style="color:#a78bfa;">Atajos de teclado</h2>
 <table cellpadding="6" style="width:100%;">
-  <tr><td style="color:#00d4ff;font-family:monospace;">Ctrl+Shift+L</td>
-      <td>Mostrar / ocultar overlay</td></tr>
-  <tr><td style="color:#00d4ff;font-family:monospace;">Ctrl+T</td>
+  <tr><td style="color:#a78bfa;font-family:monospace;">Ctrl+Shift+L</td>
+      <td>Mostrar / ocultar la ventana</td></tr>
+  <tr><td style="color:#a78bfa;font-family:monospace;">Ctrl+T</td>
       <td>Activar / desactivar traducción</td></tr>
-  <tr><td style="color:#00d4ff;font-family:monospace;">Ctrl+Alt+↑</td>
+  <tr><td style="color:#a78bfa;font-family:monospace;">Ctrl+Alt+↑</td>
       <td>Retrasar letras (si van adelantadas)</td></tr>
-  <tr><td style="color:#00d4ff;font-family:monospace;">Ctrl+Alt+↓</td>
+  <tr><td style="color:#a78bfa;font-family:monospace;">Ctrl+Alt+↓</td>
       <td>Adelantar letras (si van atrasadas)</td></tr>
-  <tr><td style="color:#00d4ff;font-family:monospace;">Ctrl+Alt+R</td>
+  <tr><td style="color:#a78bfa;font-family:monospace;">Ctrl+Alt+R</td>
       <td>Resetear ajuste de sincronización</td></tr>
-  <tr><td style="color:#00d4ff;font-family:monospace;">Ctrl+Shift+Q</td>
+  <tr><td style="color:#a78bfa;font-family:monospace;">Ctrl+Shift+Q</td>
       <td>Salir de la aplicación</td></tr>
 </table>
 
-<h2 style="color:#00d4ff;">🖱️ Interacciones del mouse</h2>
+<h2 style="color:#a78bfa;">Interacciones del mouse</h2>
 <table cellpadding="6" style="width:100%;">
-  <tr><td style="color:#00d4ff;">Click izq. en header</td>
-      <td>Arrastrar para mover el overlay</td></tr>
-  <tr><td style="color:#00d4ff;">Click izq. en línea</td>
+  <tr><td style="color:#a78bfa;">Barra superior</td>
+      <td>Arrastrar para mover; doble clic para maximizar</td></tr>
+  <tr><td style="color:#a78bfa;">Click izq. en línea</td>
       <td>Sincronizar reproducción a esa línea</td></tr>
-  <tr><td style="color:#00d4ff;">Click derecho</td>
+  <tr><td style="color:#a78bfa;">Click derecho</td>
       <td>Ajustar tiempo de sincronización manualmente</td></tr>
-  <tr><td style="color:#00d4ff;">Scroll (rueda)</td>
+  <tr><td style="color:#a78bfa;">Scroll (rueda)</td>
       <td>Navegar por la letra manualmente</td></tr>
-  <tr><td style="color:#00d4ff;">Bordes / esquinas</td>
-      <td>Redimensionar el overlay arrastrando</td></tr>
-</table>
-
-<h2 style="color:#00d4ff;">📊 Indicadores del overlay</h2>
-<table cellpadding="6" style="width:100%;">
-  <tr><td style="color:#00d4ff;">⏱ Sync</td>
-      <td>Letras sincronizadas con timestamps</td></tr>
-  <tr><td style="color:#00d4ff;">📜 Estimado</td>
-      <td>Scroll automático estimado (sin timestamps)</td></tr>
-  <tr><td style="color:#00d4ff;">📜 Manual</td>
-      <td>Navegación manual activa (vuelve a auto tras unos segundos)</td></tr>
-  <tr><td style="color:#00d4ff;">🌐</td>
-      <td>Traducción activa</td></tr>
-  <tr><td style="color:#00d4ff;">X/Y</td>
-      <td>Línea actual / total de líneas</td></tr>
+  <tr><td style="color:#a78bfa;">Bordes / esquinas</td>
+      <td>Redimensionar la ventana</td></tr>
+  <tr><td style="color:#a78bfa;">Botón cerrar</td>
+      <td>Ocultar en la bandeja sin detener la aplicación</td></tr>
 </table>
 
 <p style="color:#888; margin-top:16px;">
