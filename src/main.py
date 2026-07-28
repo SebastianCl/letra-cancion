@@ -114,18 +114,29 @@ class LetraCancionApp:
             # 1. Inicializar detector de música — SMTC primario, WindowTitle fallback (H7)
             logger.info("Inicializando detector de música...")
             smtc_ok = False
+            smtc_detector = None
             if SMTC_AVAILABLE:
                 try:
-                    self.detector = MediaDetector(target_app="Qobuz")
-                    smtc_ok = await self.detector.initialize()
+                    smtc_detector = MediaDetector(target_app="Qobuz")
+                    smtc_ok = await smtc_detector.initialize()
                     if smtc_ok:
+                        self.detector = smtc_detector
                         logger.info("Usando detector SMTC (posición real)")
                 except Exception as e:
                     logger.warning(f"SMTC no disponible, usando fallback: {e}")
                     smtc_ok = False
 
             if not smtc_ok:
-                logger.info("Usando detector por título de ventana (posición estimada)")
+                if smtc_detector is not None:
+                    try:
+                        await smtc_detector.close()
+                    except Exception as e:
+                        logger.debug(f"Error cerrando el detector SMTC: {e}")
+
+                logger.info(
+                    "Qobuz no publica una sesión SMTC; "
+                    "usando su título de ventana (posición estimada)"
+                )
                 self.detector = WindowTitleDetector(poll_interval=1.0)
                 if not await self.detector.initialize():
                     logger.error("No se pudo inicializar el detector de música")
