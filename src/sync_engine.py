@@ -101,6 +101,12 @@ class SyncEngine:
         self._manual_lock_timer: Optional[QTimer] = None
         self._manual_lock_duration_ms: int = 3000  # 3 segundos por defecto
 
+        # SMTC permite distinguir un seek real de pequeñas correcciones de reloj.
+        # Al recibirlo, sincronizar directamente evita que la protección
+        # anti-regresión bloquee saltos hacia atrás de una sola línea.
+        if hasattr(self.detector, "on_seeked"):
+            self.detector.on_seeked(self._on_detector_seeked)
+
     def set_lyrics(self, lyrics: Optional[LyricsData], duration_ms: int = 0) -> None:
         """
         Establece las letras actuales.
@@ -305,6 +311,10 @@ class SyncEngine:
             return
 
         position_ms = self.detector.get_interpolated_position_ms()
+        self._publish_position(position_ms)
+
+    def _publish_position(self, position_ms: int) -> None:
+        """Publica inmediatamente la línea correspondiente a una posición real."""
         is_playing = self.detector.is_playing
         line_idx, current_line = self._get_line_at_position(position_ms)
 
@@ -320,6 +330,18 @@ class SyncEngine:
         )
 
         self._notify_sync_update(state)
+
+    def _on_detector_seeked(self, position_ms: int) -> None:
+        """Reposiciona la letra inmediatamente cuando Qobuz hace seek."""
+        if not self.has_lyrics:
+            return
+
+        # Un seek externo representa la posición real y debe prevalecer sobre
+        # cualquier bloqueo temporal iniciado por una interacción anterior.
+        if self._manual_lock_timer:
+            self._manual_lock_timer.stop()
+        self._manual_lock_active = False
+        self._publish_position(position_ms)
 
     def _notify_sync_update(self, state: SyncState) -> None:
         """Notifica a los listeners de cambio en sincronización."""

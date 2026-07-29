@@ -38,6 +38,7 @@ from .models import TrackInfo, PlaybackInfo, PlayerState
 OnTrackChangedCallback = Callable[[Optional[TrackInfo]], None]
 OnPlaybackChangedCallback = Callable[[PlaybackInfo], None]
 OnPositionChangedCallback = Callable[[int], None]  # position_ms
+OnSeekedCallback = Callable[[int], None]  # nueva posición real en ms
 
 
 class MediaDetector:
@@ -47,6 +48,8 @@ class MediaDetector:
     Detecta la canción actual, estado de reproducción y posición
     en reproductores como Qobuz, Spotify, etc.
     """
+
+    SEEK_DETECTION_THRESHOLD_MS = 1500
 
     def __init__(self, target_app: Optional[str] = None):
         """
@@ -80,6 +83,7 @@ class MediaDetector:
         self._on_track_changed: list[OnTrackChangedCallback] = []
         self._on_playback_changed: list[OnPlaybackChangedCallback] = []
         self._on_position_changed: list[OnPositionChangedCallback] = []
+        self._on_seeked: list[OnSeekedCallback] = []
 
         # Control de polling
         self._polling = False
@@ -270,6 +274,12 @@ class MediaDetector:
             return
 
         try:
+            expected_position_ms = (
+                self.get_interpolated_position_ms()
+                if self._current_playback is not None
+                else None
+            )
+
             # Obtener estado de playback
             playback_info = self._current_session.get_playback_info()
             timeline = self._current_session.get_timeline_properties()
@@ -344,6 +354,16 @@ class MediaDetector:
 
             # Siempre notificar cambio de posición
             self._notify_position_changed(position_ms)
+            if (
+                expected_position_ms is not None
+                and abs(position_ms - expected_position_ms)
+                >= self.SEEK_DETECTION_THRESHOLD_MS
+            ):
+                logger.info(
+                    f"Seek detectado en Qobuz: {expected_position_ms}ms "
+                    f"-> {position_ms}ms"
+                )
+                self._notify_seeked(position_ms)
 
         except Exception as e:
             logger.error(f"Error obteniendo info de playback: {e}")
@@ -372,6 +392,14 @@ class MediaDetector:
             except Exception as e:
                 logger.error(f"Error en callback on_position_changed: {e}")
 
+    def _notify_seeked(self, position_ms: int) -> None:
+        """Notifica un salto deliberado en la línea de tiempo."""
+        for callback in self._on_seeked:
+            try:
+                callback(position_ms)
+            except Exception as e:
+                logger.error(f"Error en callback on_seeked: {e}")
+
     # --- API Pública ---
 
     def on_track_changed(self, callback: OnTrackChangedCallback) -> None:
@@ -385,6 +413,10 @@ class MediaDetector:
     def on_position_changed(self, callback: OnPositionChangedCallback) -> None:
         """Registra callback para cuando cambia la posición."""
         self._on_position_changed.append(callback)
+
+    def on_seeked(self, callback: OnSeekedCallback) -> None:
+        """Registra callback para saltos hacia delante o atrás en Qobuz."""
+        self._on_seeked.append(callback)
 
     @property
     def current_track(self) -> Optional[TrackInfo]:

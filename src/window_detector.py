@@ -8,10 +8,12 @@ Formato típico de Qobuz: "Título - Artista"
 """
 
 import ctypes
+import json
 import os
 import logging
 from ctypes import wintypes
 from datetime import datetime
+from pathlib import Path
 from typing import Callable, Optional
 import asyncio
 
@@ -24,6 +26,7 @@ from .models import TrackInfo, PlaybackInfo, PlayerState
 # Type aliases para callbacks
 OnTrackChangedCallback = Callable[[Optional[TrackInfo]], None]
 OnPlaybackChangedCallback = Callable[[PlaybackInfo], None]
+OnSeekedCallback = Callable[[int], None]
 
 
 class WindowTitleDetector:
@@ -59,7 +62,13 @@ class WindowTitleDetector:
         "search",
     ]
 
-    def __init__(self, poll_interval: float = 1.0):
+    SEEK_DETECTION_THRESHOLD_MS = 1500
+
+    def __init__(
+        self,
+        poll_interval: float = 1.0,
+        qobuz_state_path: Optional[Path] = None,
+    ):
         """
         Inicializa el detector.
 
@@ -78,10 +87,15 @@ class WindowTitleDetector:
         # Callbacks
         self._on_track_changed: list[OnTrackChangedCallback] = []
         self._on_playback_changed: list[OnPlaybackChangedCallback] = []
+        self._on_seeked: list[OnSeekedCallback] = []
 
         # Para estimar posición (sin SMTC no tenemos posición real)
         self._playback_start_time: Optional[datetime] = None
         self._paused_position_ms: int = 0  # Posición al pausar
+        self._qobuz_state_path = qobuz_state_path or (
+            Path(os.environ.get("APPDATA", "")) / "Qobuz" / "player-0.json"
+        )
+        self._last_qobuz_timestamp_ms: Optional[int] = None
 
         # Windows API
         self._user32 = ctypes.windll.user32
@@ -199,6 +213,7 @@ class WindowTitleDetector:
 
         # Si no hay ventana con canción activa
         if window_title is None:
+            self._update_position_from_qobuz_state()
             # Si estábamos reproduciendo, ahora estamos pausados
             if self._is_playing and self._current_track is not None:
                 # Guardar posición ANTES de cambiar estado (para que el cálculo sea correcto)
@@ -248,6 +263,7 @@ class WindowTitleDetector:
                     f"Reproducción reanudada desde posición {self._paused_position_ms}ms"
                 )
                 self._notify_playback_changed(self._current_playback)
+            self._update_position_from_qobuz_state()
         else:
             # Nueva canción - reiniciar todo
             self._current_track = new_track
@@ -266,6 +282,57 @@ class WindowTitleDetector:
             logger.info(f"Nueva canción detectada: {new_track}")
             self._notify_track_changed(new_track)
             self._notify_playback_changed(self._current_playback)
+            self._update_position_from_qobuz_state(notify_seek=False)
+
+    def _read_qobuz_position(self) -> Optional[tuple[int, int]]:
+        """Lee el punto de posición persistido por Qobuz Desktop."""
+        try:
+            payload = json.loads(
+                self._qobuz_state_path.read_text(encoding="utf-8")
+            )
+            position = payload["player"]["data"]["position"]
+            value_ms = int(position["value"])
+            timestamp_ms = int(position["timestamp"])
+            if value_ms < 0 or timestamp_ms <= 0:
+                return None
+            return value_ms, timestamp_ms
+        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+            # Qobuz puede estar escribiendo el JSON justo durante este poll.
+            return None
+
+    def _update_position_from_qobuz_state(
+        self, notify_seek: bool = True
+    ) -> None:
+        """Actualiza la posición usando el estado interno de Qobuz Desktop."""
+        anchor = self._read_qobuz_position()
+        if anchor is None:
+            return
+
+        position_ms, timestamp_ms = anchor
+        if timestamp_ms == self._last_qobuz_timestamp_ms:
+            return
+
+        expected_position_ms = self.get_interpolated_position_ms()
+        self._last_qobuz_timestamp_ms = timestamp_ms
+        self._paused_position_ms = position_ms
+        self._playback_start_time = datetime.fromtimestamp(timestamp_ms / 1000)
+
+        if self._current_playback is not None:
+            self._current_playback.position_ms = position_ms
+            self._current_playback.last_updated = self._playback_start_time
+
+        if (
+            notify_seek
+            and self._current_track is not None
+            and abs(position_ms - expected_position_ms)
+            >= self.SEEK_DETECTION_THRESHOLD_MS
+        ):
+            current_position_ms = self.get_interpolated_position_ms()
+            logger.info(
+                f"Seek detectado desde estado de Qobuz: "
+                f"{expected_position_ms}ms -> {current_position_ms}ms"
+            )
+            self._notify_seeked(current_position_ms)
 
     def _notify_track_changed(self, track: Optional[TrackInfo]) -> None:
         """Notifica cambio de track."""
@@ -283,6 +350,14 @@ class WindowTitleDetector:
             except Exception as e:
                 logger.error(f"Error en callback: {e}")
 
+    def _notify_seeked(self, position_ms: int) -> None:
+        """Notifica que Qobuz movió la reproducción a otra posición."""
+        for callback in self._on_seeked:
+            try:
+                callback(position_ms)
+            except Exception as e:
+                logger.error(f"Error en callback de seek: {e}")
+
     # --- API Pública ---
 
     def on_track_changed(self, callback: OnTrackChangedCallback) -> None:
@@ -292,6 +367,10 @@ class WindowTitleDetector:
     def on_playback_changed(self, callback: OnPlaybackChangedCallback) -> None:
         """Registra callback para cambio de playback."""
         self._on_playback_changed.append(callback)
+
+    def on_seeked(self, callback: OnSeekedCallback) -> None:
+        """Registra callback para cambios reales de posición en Qobuz."""
+        self._on_seeked.append(callback)
 
     @property
     def current_track(self) -> Optional[TrackInfo]:
