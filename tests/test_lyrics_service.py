@@ -1,7 +1,12 @@
 import unittest
 from unittest.mock import sentinel
 
-from src.lyrics_service import LRCLIBProvider, NetEaseProvider
+from src.lyrics_service import (
+    LRCLIBProvider,
+    NetEaseProvider,
+    _metadata_matches,
+    _track_matches,
+)
 
 
 class FakeResponse:
@@ -99,6 +104,44 @@ class LyricsProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(lyrics.lines), 2)
         self.assertEqual(search_response.json_calls, [{"content_type": None}])
         self.assertEqual(lyrics_response.json_calls, [{"content_type": None}])
+
+    async def test_netease_rejects_unrelated_first_result(self):
+        search_response = FakeResponse(
+            {
+                "result": {
+                    "songs": [
+                        {
+                            "id": 456,
+                            "name": "晴天",
+                            "artists": [{"name": "周杰伦"}],
+                        }
+                    ]
+                }
+            }
+        )
+        session = FakeSession(post_response=search_response)
+        provider = NetEaseProvider(session)
+
+        lyrics = await provider.search(artist="Radiohead", title="Creep")
+
+        self.assertIsNone(lyrics)
+        self.assertEqual(session.get_calls, [])
+
+
+class MetadataMatchingTests(unittest.TestCase):
+    def test_track_matches_normalized_metadata(self):
+        self.assertTrue(
+            _track_matches("Beyoncé", "Halo", "Beyonce", "Halo (Remastered)")
+        )
+
+    def test_track_rejects_unrelated_result(self):
+        self.assertFalse(
+            _track_matches("Radiohead", "Creep", "周杰伦", "晴天")
+        )
+
+    def test_metadata_rejects_missing_values(self):
+        self.assertFalse(_metadata_matches("Creep", None))
+        self.assertFalse(_metadata_matches("", "Creep"))
 
 
 if __name__ == "__main__":

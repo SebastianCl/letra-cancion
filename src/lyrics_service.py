@@ -11,8 +11,11 @@ Incluye caché local para evitar consultas repetidas.
 import asyncio
 import hashlib
 import logging
+import re
 import ssl
+import unicodedata
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Optional
 from urllib.parse import quote
@@ -23,6 +26,48 @@ import certifi
 from .lrc_parser import LRCParser, LyricsData
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_metadata(value: Optional[str]) -> str:
+    """Normaliza metadatos musicales para compararlos de forma tolerante."""
+    if not value:
+        return ""
+    value = unicodedata.normalize("NFKD", value)
+    value = "".join(char for char in value if not unicodedata.combining(char))
+    value = value.casefold()
+    return " ".join(re.findall(r"\w+", value, flags=re.UNICODE))
+
+
+def _metadata_matches(expected: str, candidate: Optional[str]) -> bool:
+    """Evita falsos positivos sin penalizar pequeñas variantes de escritura."""
+    expected_normalized = _normalize_metadata(expected)
+    candidate_normalized = _normalize_metadata(candidate)
+    if not expected_normalized or not candidate_normalized:
+        return False
+    if expected_normalized == candidate_normalized:
+        return True
+
+    shorter, longer = sorted(
+        (expected_normalized, candidate_normalized), key=len
+    )
+    if len(shorter) >= 4 and f" {shorter} " in f" {longer} ":
+        return True
+
+    return SequenceMatcher(
+        None, expected_normalized, candidate_normalized
+    ).ratio() >= 0.82
+
+
+def _track_matches(
+    artist: str,
+    title: str,
+    candidate_artist: Optional[str],
+    candidate_title: Optional[str],
+) -> bool:
+    """Comprueba que un resultado corresponde realmente a la pista solicitada."""
+    return _metadata_matches(artist, candidate_artist) and _metadata_matches(
+        title, candidate_title
+    )
 
 
 @dataclass
@@ -198,7 +243,16 @@ class LRCLIBProvider:
             ) as response:
                 if response.status == 200:
                     data = await response.json()
-                    return self._parse_response(data)
+                    if _track_matches(
+                        artist,
+                        title,
+                        data.get("artistName"),
+                        data.get("trackName"),
+                    ):
+                        return self._parse_response(data)
+                    logger.warning(
+                        "LRCLIB /get devolvió una pista con metadatos distintos"
+                    )
                 elif response.status != 404:
                     logger.warning(f"LRCLIB /get error: {response.status}")
         except Exception as e:
@@ -215,9 +269,14 @@ class LRCLIBProvider:
             ) as response:
                 if response.status == 200:
                     results = await response.json()
-                    if results and len(results) > 0:
-                        # Tomar el primer resultado
-                        return self._parse_response(results[0])
+                    for result in results or []:
+                        if _track_matches(
+                            artist,
+                            title,
+                            result.get("artistName"),
+                            result.get("trackName"),
+                        ):
+                            return self._parse_response(result)
         except Exception as e:
             logger.warning(f"LRCLIB /search exception: {e}")
 
@@ -283,14 +342,19 @@ class NetEaseProvider:
             LyricsData si se encontró, None si no.
         """
         # Paso 1: Buscar la canción
-        song_id = await self._search_song(artist, title)
-        if not song_id:
+        song = await self._search_song(artist, title)
+        if not song:
             return None
 
         # Paso 2: Obtener letras
-        return await self._get_lyrics(song_id, duration_seconds)
+        lyrics = await self._get_lyrics(song["id"], duration_seconds)
+        if lyrics:
+            lyrics.title = song.get("title")
+            lyrics.artist = song.get("artist")
+            lyrics.album = song.get("album")
+        return lyrics
 
-    async def _search_song(self, artist: str, title: str) -> Optional[int]:
+    async def _search_song(self, artist: str, title: str) -> Optional[dict]:
         """Busca el ID de la canción en NetEase."""
         try:
             search_query = f"{artist} {title}"
@@ -311,26 +375,29 @@ class NetEaseProvider:
                 if not songs:
                     return None
 
-                # Buscar la mejor coincidencia
-                title_lower = title.lower()
-                artist_lower = artist.lower()
-
                 for song in songs:
-                    song_title = song.get("name", "").lower()
+                    song_title = song.get("name")
                     song_artists = [
-                        a.get("name", "").lower() for a in song.get("artists", [])
+                        a.get("name") for a in song.get("artists", [])
                     ]
+                    matching_artist = next(
+                        (
+                            song_artist
+                            for song_artist in song_artists
+                            if _metadata_matches(artist, song_artist)
+                        ),
+                        None,
+                    )
+                    if matching_artist and _metadata_matches(title, song_title):
+                        album_data = song.get("album") or {}
+                        return {
+                            "id": song.get("id"),
+                            "title": song_title,
+                            "artist": matching_artist,
+                            "album": album_data.get("name"),
+                        }
 
-                    # Coincidencia exacta de título
-                    if title_lower in song_title or song_title in title_lower:
-                        # Verificar artista
-                        if any(
-                            artist_lower in a or a in artist_lower for a in song_artists
-                        ):
-                            return song.get("id")
-
-                # Si no hay coincidencia exacta, usar el primer resultado
-                return songs[0].get("id")
+                return None
 
         except Exception as e:
             logger.warning(f"NetEase search error: {e}")
@@ -450,7 +517,14 @@ class LyricsService:
         # 1. Buscar en caché
         cached = self.cache.get(artist, title)
         if cached:
-            if not prefer_synced or cached.is_synced:
+            if not _track_matches(
+                artist, title, cached.artist, cached.title
+            ):
+                logger.warning(
+                    f"Ignorando letra en caché con metadatos incorrectos: "
+                    f"{artist} - {title}"
+                )
+            elif not prefer_synced or cached.is_synced:
                 return LyricsSearchResult(
                     lyrics_data=cached, provider="cache", cached=True
                 )
