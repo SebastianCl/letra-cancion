@@ -5,6 +5,7 @@ from PyQt6.QtWidgets import QApplication
 from src.lrc_parser import LRCParser
 from src.models import PlaybackInfo, PlayerState
 from src.sync_engine import SyncMode, SyncState
+from src.ui import overlay as overlay_module
 from src.ui.overlay import LyricsOverlay, OverlayConfig
 
 
@@ -131,6 +132,10 @@ def test_always_on_top_and_geometry_validation(qtbot):
 
     assert window.config.always_on_top is True
     assert bool(window.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
+    window.show_always_on_top_indicator(True)
+    assert window.offset_indicator.text() == (
+        "Ventana siempre encima activada"
+    )
     assert window.restore_window_state(50000, 50000, 1200, 760) is False
 
 
@@ -177,3 +182,47 @@ def test_statuses_and_manual_scroll_return_to_current_line(qtbot):
     window._exit_manual_scroll_mode()
     assert window._manual_scroll_mode is False
     assert window.line_labels[2].text() == "I stayed up all night"
+
+
+def test_lyric_line_is_keyboard_accessible_and_respects_reduced_motion(
+    qtbot, monkeypatch
+):
+    monkeypatch.setattr(
+        overlay_module, "_system_animations_enabled", lambda: False
+    )
+    window = LyricsOverlay()
+    qtbot.addWidget(window)
+    window.resize(1200, 800)
+    lyrics = make_lyrics()
+    window.set_lyrics(lyrics, 160000)
+    window.update_sync(
+        SyncState(
+            mode=SyncMode.SYNCED,
+            current_line_index=2,
+            current_line=lyrics.lines[2],
+            position_ms=14000,
+            is_playing=True,
+            offset_ms=0,
+        )
+    )
+    window.show()
+    qtbot.wait(1)
+
+    active = window.line_labels[2]
+    assert active.focusPolicy() == Qt.FocusPolicy.StrongFocus
+    assert active.accessibleName() == "Línea actual: I stayed up all night"
+    assert "Traducción:" in active.accessibleDescription()
+    assert "Entrar o Espacio" in active.accessibleDescription()
+    assert active._animation is None
+
+    active.setFocus()
+    qtbot.wait(1)
+    assert "border: 2px solid" in active.styleSheet()
+    with qtbot.waitSignal(window.sync_time_changed, timeout=1000) as signal:
+        qtbot.keyClick(active, Qt.Key.Key_Return)
+    assert signal.args == [14000]
+
+    assert window.title_bar.close_button.accessibleName() == (
+        "Ocultar en la bandeja"
+    )
+    assert "Posición 00:14" in window.progress_bar.accessibleDescription()

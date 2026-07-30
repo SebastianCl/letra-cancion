@@ -36,7 +36,7 @@ class AppSettings:
     bg_color: str = "#080b1d"
     text_color: str = "#ffffff"
     highlight_color: str = "#ffffff"
-    dim_color: str = "#3f4762"
+    dim_color: str = "#aeb5cf"
     translation_color: str = "#8b5cf6"
 
     # --- Tamaño y posición de la ventana ---
@@ -60,6 +60,8 @@ class AppSettings:
     def validate(self) -> None:
         """Valida y corrige valores fuera de rango."""
         self.design_version = CURRENT_DESIGN_VERSION
+        if self.dim_color.lower() == "#3f4762":
+            self.dim_color = "#aeb5cf"
         self.opacity = max(0.65, min(1.0, self.opacity))
         self.font_size = max(16, min(32, self.font_size))
         self.highlight_font_size = max(32, min(64, self.highlight_font_size))

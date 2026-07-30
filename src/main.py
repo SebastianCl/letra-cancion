@@ -737,6 +737,7 @@ class LetraCancionApp:
         enabled = not self.settings_manager.settings.always_on_top
         self.settings_manager.settings.always_on_top = enabled
         self.overlay.set_always_on_top(enabled)
+        self.overlay.show_always_on_top_indicator(enabled)
         if self.tray:
             self.tray.set_always_on_top(enabled)
         self.settings_manager.save()
@@ -806,6 +807,11 @@ class LetraCancionApp:
 
     def _quit(self) -> None:
         """Cierra la aplicación de forma segura."""
+        if (
+            self.lyrics_manager
+            and not self.lyrics_manager.confirm_application_exit()
+        ):
+            return
         logger.info("Cerrando aplicación...")
         self._running = False
 
@@ -870,7 +876,7 @@ class LetraCancionApp:
         self.tray.show()
 
         # Iniciar hotkeys
-        self.hotkey_manager.start()
+        failed_hotkeys = self.hotkey_manager.start()
 
         # H5: Avisar si la librería keyboard no está disponible
         if not KEYBOARD_AVAILABLE:
@@ -879,6 +885,18 @@ class LetraCancionApp:
                 "La librería 'keyboard' no está instalada.\n"
                 "Los atajos de teclado no funcionarán.\n"
                 "Instale con: pip install keyboard",
+                duration_ms=8000,
+            )
+        elif failed_hotkeys:
+            failed_text = "\n".join(
+                f"• {hotkey.keys.upper()}: {hotkey.description}"
+                for hotkey in failed_hotkeys
+            )
+            self.tray.show_notification(
+                "Algunos atajos no están disponibles",
+                "No se pudieron registrar estas combinaciones:\n"
+                f"{failed_text}\n"
+                "Puedes seguir usando las acciones desde la bandeja.",
                 duration_ms=8000,
             )
 

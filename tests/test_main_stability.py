@@ -127,3 +127,15 @@ def test_cancel_pending_tasks_stops_every_owned_async_task():
         assert all(task.cancelled() for task in tasks)
 
     asyncio.run(scenario())
+
+
+def test_quit_is_cancelled_when_editor_has_unsaved_changes():
+    app = LetraCancionApp.__new__(LetraCancionApp)
+    app._running = True
+    app.lyrics_manager = SimpleNamespace(
+        confirm_application_exit=lambda: False
+    )
+
+    app._quit()
+
+    assert app._running is True

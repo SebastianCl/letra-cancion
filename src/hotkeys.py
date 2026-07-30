@@ -113,13 +113,14 @@ class HotkeyManager:
         """
         self._callbacks.append(callback)
 
-    def start(self) -> None:
-        """Inicia el listener de hotkeys."""
+    def start(self) -> list[HotkeyConfig]:
+        """Inicia el listener y devuelve los atajos que no pudo registrar."""
         if not KEYBOARD_AVAILABLE:
             logger.error("Librería 'keyboard' no disponible")
-            return
+            return list(self._hotkeys)
 
         # Registrar cada hotkey
+        failed: list[HotkeyConfig] = []
         for hk in self._hotkeys:
             try:
                 hook = keyboard.add_hotkey(
@@ -132,6 +133,7 @@ class HotkeyManager:
                 logger.debug(f"Registrado: {hk.keys} -> {hk.action.value}")
             except Exception as e:
                 logger.error(f"Error registrando hotkey {hk.keys}: {e}")
+                failed.append(hk)
 
         logger.info("HotkeyManager iniciado")
 
@@ -141,6 +143,7 @@ class HotkeyManager:
             keys_display = hk.keys.replace("+", "+").upper()
             print(f"   {keys_display}: {hk.description}")
         print()
+        return failed
 
     def stop(self) -> None:
         """Detiene el listener y limpia los hotkeys."""

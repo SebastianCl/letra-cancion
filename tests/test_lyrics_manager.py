@@ -155,3 +155,72 @@ def test_delete_is_available_only_for_local_candidate(qtbot, monkeypatch):
     dialog.remove_candidate(local)
     assert dialog.results_list.count() == 0
     assert dialog.delete_button.isEnabled() is False
+
+
+def test_unsaved_editor_is_not_replaced_without_confirmation(
+    qtbot, monkeypatch
+):
+    dialog = LyricsManagerDialog()
+    qtbot.addWidget(dialog)
+    dialog.load_editor(
+        LyricsData(
+            lines=[LyricLine(1000, "Draft line")],
+            artist="Draft artist",
+            title="Draft title",
+        )
+    )
+    dialog.editor_artist_edit.setFocus()
+    dialog.editor_artist_edit.selectAll()
+    qtbot.keyClicks(dialog.editor_artist_edit, "Changed artist")
+
+    assert dialog._editor_dirty is True
+    monkeypatch.setattr(
+        "src.ui.lyrics_manager.QMessageBox.question",
+        lambda *args, **kwargs: QMessageBox.StandardButton.No,
+    )
+
+    replaced = dialog.load_editor(
+        LyricsData(
+            lines=[LyricLine(2000, "Replacement")],
+            artist="Other artist",
+            title="Other title",
+        )
+    )
+
+    assert replaced is False
+    assert dialog.editor_artist_edit.text() == "Changed artist"
+    assert dialog.lines_table.item(0, 1).text() == "Draft line"
+
+    monkeypatch.setattr(
+        "src.ui.lyrics_manager.QMessageBox.question",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
+    )
+    replaced = dialog.load_editor(
+        LyricsData(
+            lines=[LyricLine(2000, "Replacement")],
+            artist="Other artist",
+            title="Other title",
+        )
+    )
+
+    assert replaced is True
+    assert dialog.editor_artist_edit.text() == "Other artist"
+    assert dialog._editor_dirty is False
+
+
+def test_search_controls_expose_accessible_context_and_focus_errors(qtbot):
+    dialog = LyricsManagerDialog()
+    qtbot.addWidget(dialog)
+    dialog.show()
+
+    qtbot.mouseClick(dialog.search_button, Qt.MouseButton.LeftButton)
+
+    assert dialog.search_status_label.text() == (
+        "El artista y el título son obligatorios."
+    )
+    assert dialog.focusWidget() is dialog.search_artist_edit
+    assert dialog.results_list.accessibleName() == "Resultados de búsqueda"
+    assert dialog.lines_table.accessibleName() == "Líneas de la letra"
+    assert dialog.close_button.accessibleDescription() == (
+        "Oculta el gestor y conserva el borrador actual."
+    )

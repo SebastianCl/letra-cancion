@@ -113,11 +113,14 @@ class LyricsManagerDialog(QDialog):
         self._preview_candidate: Optional[LyricsCandidate] = None
         self._preview_lyrics: Optional[LyricsData] = None
         self._editor_source = "manual"
+        self._editor_dirty = False
+        self._loading_editor = False
 
         self._build_ui()
         self._apply_style()
         self._capture_shortcut = QShortcut(QKeySequence("F8"), self)
         self._capture_shortcut.activated.connect(self._capture_selected_row)
+        self._connect_editor_dirty_signals()
 
     def _apply_style(self) -> None:
         self.setStyleSheet(
@@ -132,11 +135,16 @@ class LyricsManagerDialog(QDialog):
                 background:#111735; color:#f4f5fb; border:1px solid #303a70;
                 border-radius:7px; padding:6px; selection-background-color:#6d4bd6;
             }
+            QLineEdit:focus, QPlainTextEdit:focus, QListWidget:focus,
+            QTableWidget:focus, QSpinBox:focus {
+                border:2px solid #c4b5fd;
+            }
             QPushButton {
                 background:#6d4bd6; color:white; border:none;
                 border-radius:7px; padding:8px 13px; font-weight:600;
             }
             QPushButton:hover { background:#825df8; }
+            QPushButton:focus { border:2px solid #f8fafc; }
             QPushButton:disabled { background:#303550; color:#777e9d; }
             QPushButton#dangerButton { background:#8f2942; }
             QPushButton#dangerButton:hover { background:#b33452; }
@@ -148,6 +156,10 @@ class LyricsManagerDialog(QDialog):
                 border-top-left-radius:7px; border-top-right-radius:7px;
             }
             QTabBar::tab:selected { background:#25204d; color:white; }
+            QTabBar::tab:focus { border:2px solid #c4b5fd; }
+            QCheckBox:focus {
+                border:2px solid #c4b5fd; border-radius:5px;
+            }
             QHeaderView::section {
                 background:#171e43; color:#d6d8e8; border:none; padding:7px;
             }
@@ -160,19 +172,26 @@ class LyricsManagerDialog(QDialog):
         root.setSpacing(10)
 
         self.current_track_label = QLabel("Qobuz: sin canción activa")
+        self.current_track_label.setAccessibleName(
+            "Canción activa en Qobuz"
+        )
         self.current_track_label.setStyleSheet("color:#aeb3cc;")
         root.addWidget(self.current_track_label)
 
         self.tabs = QTabWidget()
+        self.tabs.setAccessibleName("Secciones del gestor de letras")
         root.addWidget(self.tabs, 1)
         self._build_search_tab()
         self._build_editor_tab()
 
-        close_button = QPushButton("Cerrar")
-        close_button.clicked.connect(self.hide)
+        self.close_button = QPushButton("Cerrar")
+        self.close_button.setAccessibleDescription(
+            "Oculta el gestor y conserva el borrador actual."
+        )
+        self.close_button.clicked.connect(self.hide)
         footer = QHBoxLayout()
         footer.addStretch()
-        footer.addWidget(close_button)
+        footer.addWidget(self.close_button)
         root.addLayout(footer)
 
     def _build_search_tab(self) -> None:
@@ -184,13 +203,25 @@ class LyricsManagerDialog(QDialog):
         form = QGridLayout(form_host)
         self.search_artist_edit = QLineEdit()
         self.search_artist_edit.setPlaceholderText("Artista")
+        self.search_artist_edit.setAccessibleName("Artista para buscar")
         self.search_title_edit = QLineEdit()
         self.search_title_edit.setPlaceholderText("Título")
+        self.search_title_edit.setAccessibleName("Título para buscar")
         self.search_button = QPushButton("Buscar")
+        self.search_button.setAccessibleDescription(
+            "Busca coincidencias en la biblioteca y los proveedores."
+        )
         self.new_button = QPushButton("Nueva letra")
-        form.addWidget(QLabel("Artista"), 0, 0)
+        self.new_button.setAccessibleDescription(
+            "Abre un borrador vacío en el editor."
+        )
+        artist_label = QLabel("&Artista")
+        artist_label.setBuddy(self.search_artist_edit)
+        title_label = QLabel("&Título")
+        title_label.setBuddy(self.search_title_edit)
+        form.addWidget(artist_label, 0, 0)
         form.addWidget(self.search_artist_edit, 0, 1)
-        form.addWidget(QLabel("Título"), 0, 2)
+        form.addWidget(title_label, 0, 2)
         form.addWidget(self.search_title_edit, 0, 3)
         form.addWidget(self.search_button, 0, 4)
         form.addWidget(self.new_button, 0, 5)
@@ -199,11 +230,16 @@ class LyricsManagerDialog(QDialog):
         self.search_status_label = QLabel(
             "Escribe artista y título para buscar en tu biblioteca y proveedores."
         )
+        self.search_status_label.setAccessibleName("Estado de búsqueda")
         self.search_status_label.setStyleSheet("color:#9ca3c5; padding:4px;")
         layout.addWidget(self.search_status_label)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         self.results_list = QListWidget()
+        self.results_list.setAccessibleName("Resultados de búsqueda")
+        self.results_list.setAccessibleDescription(
+            "Selecciona una coincidencia para cargar su previsualización."
+        )
         self.results_list.setMinimumWidth(360)
         splitter.addWidget(self.results_list)
 
@@ -211,12 +247,16 @@ class LyricsManagerDialog(QDialog):
         preview_layout = QVBoxLayout(preview_host)
         preview_layout.setContentsMargins(8, 0, 0, 0)
         self.preview_metadata_label = QLabel("Selecciona una coincidencia")
+        self.preview_metadata_label.setAccessibleName(
+            "Metadatos de la previsualización"
+        )
         self.preview_metadata_label.setWordWrap(True)
         self.preview_metadata_label.setStyleSheet(
             "font-size:15px; font-weight:600; color:#dcd8ff;"
         )
         self.preview_text = QPlainTextEdit()
         self.preview_text.setReadOnly(True)
+        self.preview_text.setAccessibleName("Previsualización de la letra")
         self.preview_text.setPlaceholderText(
             "La previsualización aparecerá aquí."
         )
@@ -225,9 +265,21 @@ class LyricsManagerDialog(QDialog):
 
         actions = QHBoxLayout()
         self.apply_button = QPushButton("Aplicar a Qobuz")
+        self.apply_button.setAccessibleDescription(
+            "Usa esta letra para la canción que se reproduce actualmente."
+        )
         self.save_copy_button = QPushButton("Guardar copia")
+        self.save_copy_button.setAccessibleDescription(
+            "Guarda una copia en la biblioteca personal."
+        )
         self.edit_button = QPushButton("Editar")
+        self.edit_button.setAccessibleDescription(
+            "Abre esta letra en el editor."
+        )
         self.delete_button = QPushButton("Eliminar local")
+        self.delete_button.setAccessibleDescription(
+            "Elimina la copia seleccionada de la biblioteca personal."
+        )
         self.delete_button.setObjectName("dangerButton")
         for button in (
             self.apply_button,
@@ -264,9 +316,15 @@ class LyricsManagerDialog(QDialog):
         metadata_group = QGroupBox("Canción")
         metadata_form = QFormLayout(metadata_group)
         self.editor_artist_edit = QLineEdit()
+        self.editor_artist_edit.setAccessibleName("Artista de la letra")
         self.editor_title_edit = QLineEdit()
+        self.editor_title_edit.setAccessibleName("Título de la letra")
         self.editor_album_edit = QLineEdit()
+        self.editor_album_edit.setAccessibleName("Álbum de la letra")
         self.editor_duration_spin = QSpinBox()
+        self.editor_duration_spin.setAccessibleName(
+            "Duración de la canción"
+        )
         self.editor_duration_spin.setRange(0, 60 * 60)
         self.editor_duration_spin.setSuffix(" s")
         metadata_form.addRow("Artista:", self.editor_artist_edit)
@@ -278,6 +336,9 @@ class LyricsManagerDialog(QDialog):
         import_group = QGroupBox("Pegar o importar")
         import_layout = QVBoxLayout(import_group)
         self.raw_lyrics_edit = QPlainTextEdit()
+        self.raw_lyrics_edit.setAccessibleName(
+            "Texto de letra para procesar"
+        )
         self.raw_lyrics_edit.setMaximumHeight(120)
         self.raw_lyrics_edit.setPlaceholderText(
             "Pega texto plano o contenido LRC. Después pulsa “Procesar texto”."
@@ -295,6 +356,10 @@ class LyricsManagerDialog(QDialog):
         layout.addWidget(import_group)
 
         self.lines_table = QTableWidget(0, 2)
+        self.lines_table.setAccessibleName("Líneas de la letra")
+        self.lines_table.setAccessibleDescription(
+            "Tabla editable con el tiempo y el texto de cada línea."
+        )
         self.lines_table.setHorizontalHeaderLabels(("Tiempo", "Texto"))
         self.lines_table.verticalHeader().setVisible(False)
         self.lines_table.horizontalHeader().setSectionResizeMode(
@@ -327,7 +392,11 @@ class LyricsManagerDialog(QDialog):
 
         footer = QHBoxLayout()
         self.synced_check = QCheckBox("Letra sincronizada")
+        self.synced_check.setAccessibleDescription(
+            "Indica que cada línea tiene un tiempo válido y creciente."
+        )
         self.editor_status_label = QLabel("")
+        self.editor_status_label.setAccessibleName("Estado del editor")
         self.editor_status_label.setStyleSheet("color:#9ca3c5;")
         self.save_editor_button = QPushButton("Guardar en biblioteca")
         footer.addWidget(self.synced_check)
@@ -353,6 +422,55 @@ class LyricsManagerDialog(QDialog):
         self.editor_title_edit.textChanged.connect(
             self._update_capture_availability
         )
+
+    def _connect_editor_dirty_signals(self) -> None:
+        for editor in (
+            self.editor_artist_edit,
+            self.editor_title_edit,
+            self.editor_album_edit,
+        ):
+            editor.textEdited.connect(self._mark_editor_dirty)
+        self.editor_duration_spin.valueChanged.connect(
+            self._mark_editor_dirty
+        )
+        self.raw_lyrics_edit.textChanged.connect(self._mark_editor_dirty)
+        self.lines_table.itemChanged.connect(self._mark_editor_dirty)
+        self.synced_check.toggled.connect(self._mark_editor_dirty)
+
+    def _mark_editor_dirty(self, *args) -> None:
+        if not self._loading_editor:
+            self._editor_dirty = True
+
+    def _confirm_discard_editor(self) -> bool:
+        if not self._editor_dirty:
+            return True
+        answer = QMessageBox.question(
+            self,
+            "Descartar cambios sin guardar",
+            (
+                "El editor contiene cambios sin guardar.\n\n"
+                "¿Quieres descartarlos y abrir otra letra?"
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return answer == QMessageBox.StandardButton.Yes
+
+    def confirm_application_exit(self) -> bool:
+        """Confirma el cierre global cuando existe un borrador sin guardar."""
+        if not self._editor_dirty:
+            return True
+        answer = QMessageBox.question(
+            self,
+            "Salir con cambios sin guardar",
+            (
+                "El editor contiene cambios sin guardar.\n\n"
+                "¿Quieres descartarlos y salir de Letra Canción?"
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return answer == QMessageBox.StandardButton.Yes
 
     def set_current_track(self, track: Optional[TrackInfo]) -> None:
         """Actualiza acciones contextuales sin modificar el borrador."""
@@ -382,6 +500,12 @@ class LyricsManagerDialog(QDialog):
             self.search_status_label.setText(
                 "El artista y el título son obligatorios."
             )
+            missing = (
+                self.search_artist_edit
+                if not artist
+                else self.search_title_edit
+            )
+            missing.setFocus()
             return
         self.set_searching()
         self.search_requested.emit(artist, title)
@@ -400,6 +524,7 @@ class LyricsManagerDialog(QDialog):
             self.search_status_label.setText(
                 "No se encontraron coincidencias. Puedes agregar la letra manualmente."
             )
+            self.new_button.setFocus()
             return
         for candidate in candidates:
             sync_label = (
@@ -419,10 +544,12 @@ class LyricsManagerDialog(QDialog):
             f"{len(candidates)} coincidencia(s). Selecciona una para previsualizar."
         )
         self.results_list.setCurrentRow(0)
+        self.results_list.setFocus()
 
     def set_search_error(self, message: str) -> None:
         self.search_button.setEnabled(True)
         self.search_status_label.setText(f"No se pudo completar la búsqueda: {message}")
+        self.search_button.setFocus()
 
     def _on_result_selected(
         self,
@@ -561,31 +688,42 @@ class LyricsManagerDialog(QDialog):
             f"{candidate.artist} — {candidate.title}."
         )
 
-    def start_new_entry(self) -> None:
+    def start_new_entry(self) -> bool:
         lyrics = LyricsData(lines=[], is_synced=False)
         if self._current_track is not None:
             lyrics.artist = self._current_track.artist
             lyrics.title = self._current_track.title
             lyrics.album = self._current_track.album
-        self.load_editor(lyrics, source="manual")
+        return self.load_editor(lyrics, source="manual")
 
     def load_editor(
         self,
         lyrics: LyricsData,
         duration_ms: int = 0,
         source: str = "manual",
-    ) -> None:
-        self._editor_source = source or "manual"
-        self.editor_artist_edit.setText(lyrics.artist or "")
-        self.editor_title_edit.setText(lyrics.title or "")
-        self.editor_album_edit.setText(lyrics.album or "")
-        self.editor_duration_spin.setValue(max(0, duration_ms // 1000))
-        self.synced_check.setChecked(lyrics.is_synced)
-        self._set_table_lines(lyrics.lines)
-        self.raw_lyrics_edit.clear()
-        self.editor_status_label.setText("")
+    ) -> bool:
+        if not self._confirm_discard_editor():
+            return False
+        self._loading_editor = True
+        try:
+            self._editor_source = source or "manual"
+            self.editor_artist_edit.setText(lyrics.artist or "")
+            self.editor_title_edit.setText(lyrics.title or "")
+            self.editor_album_edit.setText(lyrics.album or "")
+            self.editor_duration_spin.setValue(
+                max(0, duration_ms // 1000)
+            )
+            self.synced_check.setChecked(lyrics.is_synced)
+            self._set_table_lines(lyrics.lines)
+            self.raw_lyrics_edit.clear()
+            self.editor_status_label.setText("")
+        finally:
+            self._loading_editor = False
+        self._editor_dirty = False
         self.tabs.setCurrentIndex(1)
         self._update_capture_availability()
+        self.editor_artist_edit.setFocus()
+        return True
 
     def _set_table_lines(self, lines: list[LyricLine]) -> None:
         self.lines_table.setRowCount(0)
@@ -617,11 +755,13 @@ class LyricsManagerDialog(QDialog):
         self.lines_table.editItem(
             self.lines_table.item(self.lines_table.rowCount() - 1, 1)
         )
+        self._mark_editor_dirty()
 
     def _remove_selected_row(self) -> None:
         row = self.lines_table.currentRow()
         if row >= 0:
             self.lines_table.removeRow(row)
+            self._mark_editor_dirty()
             if self.lines_table.rowCount():
                 self.lines_table.selectRow(
                     min(row, self.lines_table.rowCount() - 1)
@@ -652,6 +792,7 @@ class LyricsManagerDialog(QDialog):
                 target, column, QTableWidgetItem(values[column])
             )
         self.lines_table.selectRow(target)
+        self._mark_editor_dirty()
 
     def _process_raw_text(self) -> None:
         content = self.raw_lyrics_edit.toPlainText().strip()
@@ -681,6 +822,7 @@ class LyricsManagerDialog(QDialog):
             self.editor_album_edit.setText(lyrics.album)
         self._set_table_lines(lyrics.lines)
         self.synced_check.setChecked(lyrics.is_synced)
+        self._mark_editor_dirty()
         self.editor_status_label.setText(
             f"{len(lyrics.lines)} líneas procesadas."
         )
@@ -732,6 +874,7 @@ class LyricsManagerDialog(QDialog):
         )
         self._set_table_lines(lyrics.lines)
         self.synced_check.setChecked(False)
+        self._mark_editor_dirty()
         self.editor_status_label.setText("Tiempos estimados automáticamente.")
 
     def _update_capture_availability(self) -> None:
@@ -742,11 +885,13 @@ class LyricsManagerDialog(QDialog):
         )
         self.capture_button.setEnabled(enabled)
         self._capture_shortcut.setEnabled(enabled)
-        self.capture_button.setToolTip(
+        guidance = (
             "Asigna la posición actual de Qobuz a la fila seleccionada"
             if enabled
             else "Disponible cuando el editor coincide con la canción de Qobuz"
         )
+        self.capture_button.setToolTip(guidance)
+        self.capture_button.setAccessibleDescription(guidance)
 
     def _capture_selected_row(self) -> None:
         if not self.capture_button.isEnabled():
@@ -766,6 +911,7 @@ class LyricsManagerDialog(QDialog):
             row, 0, QTableWidgetItem(format_timestamp(timestamp_ms))
         )
         self.synced_check.setChecked(True)
+        self._mark_editor_dirty()
         next_row = min(row + 1, self.lines_table.rowCount() - 1)
         self.lines_table.selectRow(next_row)
         self.editor_status_label.setText(
@@ -841,6 +987,7 @@ class LyricsManagerDialog(QDialog):
         return answer == QMessageBox.StandardButton.Yes
 
     def show_save_success(self, artist: str, title: str) -> None:
+        self._editor_dirty = False
         self.editor_status_label.setText(
             f"Guardada: {artist} — {title}"
         )
