@@ -66,6 +66,40 @@ def test_responsive_context_and_stacked_translation(qtbot):
     assert window.line_labels[1].text() == "I stayed up all night"
 
 
+def test_multiline_current_lyric_gets_enough_height(qtbot):
+    window = LyricsOverlay()
+    qtbot.addWidget(window)
+    window.resize(1000, 650)
+    window.show()
+
+    lyrics = LRCParser.parse(
+        "[00:05.00]Welcome to the world of the Plastic Beach"
+    )
+    lyrics.lines[0].translation = "Bienvenido al mundo de Plastic Beach"
+    window.set_lyrics(lyrics, duration_ms=160000)
+    window.update_sync(
+        SyncState(
+            mode=SyncMode.SYNCED,
+            current_line_index=0,
+            current_line=lyrics.lines[0],
+            position_ms=5000,
+            is_playing=True,
+            offset_ms=0,
+        )
+    )
+    qtbot.wait(1)
+
+    active = window.line_labels[1]
+    original_height = active._original_label.heightForWidth(
+        active._original_label.width()
+    )
+    translation_height = active._translation_label.heightForWidth(
+        active._translation_label.width()
+    )
+
+    assert active.height() >= original_height + translation_height + 18
+
+
 def test_progress_uses_playback_duration_and_is_not_seekable(qtbot):
     window = LyricsOverlay()
     qtbot.addWidget(window)

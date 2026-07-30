@@ -351,6 +351,29 @@ class LyricLabel(QWidget):
         self._apply_style()
         self._update_accessible_text()
 
+    def _update_height_hint(self) -> None:
+        """Asegura espacio suficiente para texto envuelto y su traducción."""
+        if self._original_label.width() <= 0:
+            return
+
+        required_height = self._original_label.heightForWidth(
+            self._original_label.width()
+        )
+        if self._translation_label.isVisible():
+            required_height += self._translation_label.heightForWidth(
+                self._translation_label.width()
+            )
+        required_height += 7  # separación entre original y traducción
+        if self._focus_rule.isVisible():
+            required_height += self._focus_rule.sizeHint().height() + 7
+
+        base_height = 142 if self._current else 88
+        self.setMinimumHeight(max(base_height, required_height + 4))
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self._update_height_hint()
+
     def set_responsive_sizes(
         self,
         original_size: int,
@@ -499,6 +522,7 @@ class LyricLabel(QWidget):
         self._translation_label.setVisible(self._translation_visible)
         self._focus_rule.setVisible(self._current and self._translation_visible)
         self.setMinimumHeight(142 if self._current else 88)
+        self._update_height_hint()
         self.setToolTip(
             "Haz clic para sincronizar con esta línea"
             if self._real_line_index >= 0
@@ -695,7 +719,7 @@ class TranslationButton(QAbstractButton):
         self._enabled_state = True
         self.setFixedSize(36, 30)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
     def set_translation_enabled(self, enabled: bool) -> None:
         if self._enabled_state != enabled:
@@ -739,11 +763,6 @@ class TranslationButton(QAbstractButton):
         painter.setPen(QPen(QColor("#0b1028"), 1))
         painter.setBrush(QColor("#a3e635" if active else "#626a84"))
         painter.drawEllipse(QPoint(31, 4), 3, 3)
-
-        if self.hasFocus():
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.setPen(QPen(QColor("#c4b5fd"), 1))
-            painter.drawRoundedRect(QRectF(1, 1, 33, 27), 7, 7)
 
 
 class WindowTitleBar(QFrame):
@@ -849,6 +868,7 @@ class WindowTitleBar(QFrame):
             f"Control de ventana: {tooltip.lower()}."
         )
         button.setCursor(Qt.CursorShape.PointingHandCursor)
+        button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         hover = (
             "background:rgba(225,70,90,0.85); color:white;"
             if close
