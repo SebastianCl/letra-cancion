@@ -575,10 +575,13 @@ class LetraCancionApp:
             lyrics.artist = self._current_track.artist
             lyrics.title = self._current_track.title
             lyrics.album = self._current_track.album or candidate.album or None
-            self.lyrics_service.cache.save(
-                self._current_track.artist,
-                self._current_track.title,
-                lyrics,
+            self.lyrics_service.save_user_lyrics(
+                artist=self._current_track.artist,
+                title=self._current_track.title,
+                album=lyrics.album or "",
+                duration_ms=duration_ms,
+                lyrics_data=lyrics,
+                source=candidate.provider,
             )
         self._activate_lyrics(
             self._current_track,

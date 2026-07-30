@@ -156,7 +156,7 @@ def test_save_from_manager_invalidates_translation_and_refreshes_current_track()
     )
 
 
-def test_apply_remote_candidate_caches_and_activates_current_track():
+def test_apply_remote_candidate_saves_locally_and_activates_current_track():
     app = make_app()
     match = LyricsCandidate(
         provider="LRCLIB",
@@ -169,7 +169,8 @@ def test_apply_remote_candidate_caches_and_activates_current_track():
 
     app._on_manager_apply_requested(match)
 
-    assert len(app.lyrics_service.cache.saved) == 1
+    assert len(app.lyrics_service.saved) == 1
+    assert app.lyrics_service.saved[0]["source"] == "LRCLIB"
     assert app.sync_engine.loaded[0][1] == 238000
     assert app.overlay.offsets == [0]
     assert app.tray.errors == []

@@ -123,7 +123,7 @@ def test_library_deletes_only_exact_local_entry(tmp_path):
     assert library.delete("Beyoncé", "Halo") is False
 
 
-def test_local_library_survives_download_cache_clear(tmp_path):
+def test_local_library_survives_service_restart(tmp_path):
     service = LyricsService(tmp_path)
     entry = make_entry()
     service.save_user_lyrics(
@@ -133,13 +133,12 @@ def test_local_library_survives_download_cache_clear(tmp_path):
         duration_ms=entry.duration_ms,
         lyrics_data=entry.lyrics_data,
     )
-    service.cache.save(entry.artist, entry.title, entry.lyrics_data)
+    restarted = LyricsService(tmp_path)
 
-    assert service.cache.clear() == 1
-    assert service.library.get(entry.artist, entry.title) is not None
+    assert restarted.library.get(entry.artist, entry.title) is not None
 
 
-def test_service_deletes_local_entry_without_clearing_provider_cache(tmp_path):
+def test_service_deletes_local_entry(tmp_path):
     service = LyricsService(tmp_path)
     entry = make_entry()
     service.save_user_lyrics(
@@ -149,11 +148,8 @@ def test_service_deletes_local_entry_without_clearing_provider_cache(tmp_path):
         duration_ms=entry.duration_ms,
         lyrics_data=entry.lyrics_data,
     )
-    service.cache.save(entry.artist, entry.title, entry.lyrics_data)
-
     assert service.delete_user_lyrics(entry.artist, entry.title) is True
     assert service.library.get(entry.artist, entry.title) is None
-    assert service.cache.get(entry.artist, entry.title) is not None
 
 
 def test_automatic_search_prioritizes_local_library(tmp_path):
@@ -185,7 +181,7 @@ def test_service_lists_personal_and_downloaded_lyrics(tmp_path):
         duration_ms=entry.duration_ms,
         lyrics_data=entry.lyrics_data,
     )
-    service.cache.save(
+    service.save_user_lyrics(
         "Radiohead",
         "Creep",
         LyricsData(
@@ -194,6 +190,7 @@ def test_service_lists_personal_and_downloaded_lyrics(tmp_path):
             title="Creep",
             is_synced=True,
         ),
+        source="LRCLIB",
     )
 
     candidates = service.list_local_candidates()

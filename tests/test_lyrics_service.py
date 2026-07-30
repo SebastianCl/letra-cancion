@@ -290,7 +290,7 @@ class LyricsCacheTests(unittest.TestCase):
         self.assertEqual(restored.artist, "Artist")
         self.assertEqual(restored.title, "Song")
 
-    def test_service_uses_cached_plain_lyrics_when_providers_fail(self):
+    def test_service_uses_local_library_when_providers_fail(self):
         from tempfile import TemporaryDirectory
         from pathlib import Path
 
@@ -303,14 +303,16 @@ class LyricsCacheTests(unittest.TestCase):
             lyrics = LRCParser.parse_plain_lyrics(
                 "First line\nSecond line", duration_ms=20000
             )
-            service.cache.save("Artist", "Song", lyrics)
+            service.save_user_lyrics(
+                "Artist", "Song", lyrics, source="LRCLIB"
+            )
             service._providers = [("offline", OfflineProvider())]
 
             result = asyncio.run(service.search("Artist", "Song"))
 
         self.assertIsNotNone(result)
-        self.assertTrue(result.cached)
-        self.assertEqual(result.provider, "cache")
+        self.assertFalse(result.cached)
+        self.assertEqual(result.provider, "Biblioteca local")
         self.assertEqual(result.lyrics_data.lines[0].text, "First line")
 
     def test_metadata_cannot_escape_hashed_cache_directory(self):

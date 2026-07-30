@@ -230,7 +230,7 @@ class LyricsManagerDialog(QDialog):
 
         self.local_button = QPushButton("Ver letras guardadas")
         self.local_button.setAccessibleDescription(
-            "Muestra todas las letras guardadas en la biblioteca y la caché offline."
+            "Muestra todas las letras guardadas en la biblioteca local."
         )
         layout.addWidget(self.local_button)
 
