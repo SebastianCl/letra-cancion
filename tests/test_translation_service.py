@@ -2,7 +2,12 @@ import json
 import threading
 
 from src.lrc_parser import LyricLine, LyricsData
-from src.translation_service import TranslationCache, TranslationService
+from src.translation_service import (
+    TranslationCache,
+    TranslationService,
+    _get_translatable_lines,
+    _resolve_translation_direction,
+)
 
 
 class FailingTranslator:
@@ -56,3 +61,17 @@ def test_translation_cache_rejects_unsafe_target_language_filename(tmp_path):
 
     with __import__("pytest").raises(ValueError, match="Idioma destino"):
         cache._get_cache_path("Artist", "Song", "..\\outside")
+
+
+def test_translation_helpers_apply_the_same_override_and_line_filtering():
+    lyrics = LyricsData(
+        lines=[
+            LyricLine(1000, "Hello world"),
+            LyricLine(2000, "[Instrumental]"),
+            LyricLine(3000, "   "),
+        ]
+    )
+
+    assert _resolve_translation_direction(lyrics, "es") == ("en", "es")
+    assert _resolve_translation_direction(lyrics, "en") == ("es", "en")
+    assert [idx for idx, _ in _get_translatable_lines(lyrics)] == [0]

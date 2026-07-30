@@ -10,6 +10,7 @@ import asyncio
 import logging
 import sys
 import threading
+from collections.abc import Coroutine
 from typing import Any, Optional
 
 from PyQt6.QtWidgets import QApplication, QMessageBox
@@ -24,6 +25,7 @@ from .lyrics_library import (
     clone_lyrics_data,
     track_metadata_matches,
 )
+from .lrc_parser import LyricsData
 from .translation_service import TranslationService
 from .sync_engine import SyncEngine, SyncState, SyncMode
 from .hotkeys import HotkeyManager, HotkeyAction, KEYBOARD_AVAILABLE
@@ -83,11 +85,11 @@ class LetraCancionApp:
             self.settings_manager.settings.translation_enabled
         )
         self._translation_cancel_event: Optional[threading.Event] = None
-        self._lyrics_fetch_task: Optional[asyncio.Task] = None
-        self._translation_task: Optional[asyncio.Task] = None
-        self._manager_search_task: Optional[asyncio.Task] = None
-        self._manager_preview_task: Optional[asyncio.Task] = None
-        self._detector_task: Optional[asyncio.Task] = None
+        self._lyrics_fetch_task: Optional[asyncio.Task[None]] = None
+        self._translation_task: Optional[asyncio.Task[None]] = None
+        self._manager_search_task: Optional[asyncio.Task[None]] = None
+        self._manager_preview_task: Optional[asyncio.Task[None]] = None
+        self._detector_task: Optional[asyncio.Task[None]] = None
 
         # Qt App
         self.app: Optional[QApplication] = None
@@ -301,10 +303,18 @@ class LetraCancionApp:
 
     def _schedule_lyrics_fetch(self, track: TrackInfo) -> None:
         """Inicia una búsqueda y cancela la que pertenecía a la pista anterior."""
-        fetch_task = getattr(self, "_lyrics_fetch_task", None)
-        if fetch_task and not fetch_task.done():
-            fetch_task.cancel()
-        self._lyrics_fetch_task = asyncio.create_task(self._fetch_lyrics(track))
+        self._replace_task("_lyrics_fetch_task", self._fetch_lyrics(track))
+
+    def _replace_task(
+        self,
+        attribute: str,
+        coroutine: Coroutine[Any, Any, None],
+    ) -> None:
+        """Cancela la tarea previa de un flujo propio y programa su reemplazo."""
+        task = getattr(self, attribute, None)
+        if task and not task.done():
+            task.cancel()
+        setattr(self, attribute, asyncio.create_task(coroutine))
 
     async def _fetch_lyrics(self, track: TrackInfo) -> None:
         """Busca letras para un track y muestra la letra original inmediatamente, traduciendo en segundo plano."""
@@ -352,7 +362,7 @@ class LetraCancionApp:
     def _activate_lyrics(
         self,
         track: TrackInfo,
-        lyrics_data,
+        lyrics_data: LyricsData,
         duration_ms: int = 0,
         provider: str = "",
         notify: bool = False,
@@ -375,12 +385,13 @@ class LetraCancionApp:
             self.tray.show_lyrics_found(provider)
 
         if self._translation_enabled and self.translation_service:
-            self._translation_task = asyncio.create_task(
-                self._translate_active_lyrics(track, lyrics_data, duration_ms)
+            self._replace_task(
+                "_translation_task",
+                self._translate_active_lyrics(track, lyrics_data, duration_ms),
             )
 
     async def _translate_active_lyrics(
-        self, track: TrackInfo, lyrics_data, duration_ms: int
+        self, track: TrackInfo, lyrics_data: LyricsData, duration_ms: int
     ) -> None:
         """Traduce progresivamente la letra activa sin bloquear la interfaz."""
         cancel_event = threading.Event()
@@ -470,10 +481,9 @@ class LetraCancionApp:
     def _on_manager_search_requested(
         self, artist: str, title: str
     ) -> None:
-        if self._manager_search_task and not self._manager_search_task.done():
-            self._manager_search_task.cancel()
-        self._manager_search_task = asyncio.create_task(
-            self._search_manager_candidates(artist, title)
+        self._replace_task(
+            "_manager_search_task",
+            self._search_manager_candidates(artist, title),
         )
 
     async def _search_manager_candidates(
@@ -495,10 +505,9 @@ class LetraCancionApp:
     def _on_manager_preview_requested(
         self, candidate: LyricsCandidate
     ) -> None:
-        if self._manager_preview_task and not self._manager_preview_task.done():
-            self._manager_preview_task.cancel()
-        self._manager_preview_task = asyncio.create_task(
-            self._load_manager_preview(candidate)
+        self._replace_task(
+            "_manager_preview_task",
+            self._load_manager_preview(candidate),
         )
 
     async def _load_manager_preview(

@@ -302,6 +302,34 @@ def _is_instrumental_line(text: str) -> bool:
     return False
 
 
+def _resolve_translation_direction(
+    lyrics: LyricsData, target_lang: str
+) -> tuple[str, str]:
+    """Determina la dirección de traducción para una letra completa."""
+    all_text = " ".join(line.text for line in lyrics.lines if line.text.strip())
+    source_lang, detected_target = _detect_language(all_text)
+
+    if target_lang != "auto":
+        detected_target = target_lang
+        if detected_target == "es":
+            source_lang = "en"
+        elif detected_target == "en":
+            source_lang = "es"
+
+    return source_lang, detected_target
+
+
+def _get_translatable_lines(
+    lyrics: LyricsData,
+) -> list[tuple[int, LyricLine]]:
+    """Devuelve las líneas con contenido apto para enviar al traductor."""
+    return [
+        (idx, line)
+        for idx, line in enumerate(lyrics.lines)
+        if line.text.strip() and not _is_instrumental_line(line.text)
+    ]
+
+
 class TranslationService:
     """
     Servicio de traducción bidireccional de letras usando Google Translate.
@@ -364,20 +392,9 @@ class TranslationService:
         artist = lyrics.artist or "Unknown"
         title = lyrics.title or "Unknown"
 
-        # Recolectar texto para análisis de idioma
-        all_text = " ".join(line.text for line in lyrics.lines if line.text.strip())
-
-        # Detectar dirección de traducción
-        source_lang, detected_target = _detect_language(all_text)
-
-        # Usar target_lang del parámetro solo si no es "auto"
-        if target_lang != "auto":
-            detected_target = target_lang
-            # Si el usuario fuerza un target, ajustar source coherentemente
-            if detected_target == "es":
-                source_lang = "en"
-            elif detected_target == "en":
-                source_lang = "es"
+        source_lang, detected_target = _resolve_translation_direction(
+            lyrics, target_lang
+        )
 
         logger.info(
             f"Dirección de traducción detectada: {source_lang}→{detected_target} "
@@ -390,11 +407,7 @@ class TranslationService:
             logger.info(f"Usando traducciones cacheadas para: {artist} - {title}")
             return self._apply_translations(lyrics, cached_translations)
 
-        # Preparar líneas para traducción (filtrar instrumentales)
-        lines_to_translate: list[tuple[int, LyricLine]] = []
-        for idx, line in enumerate(lyrics.lines):
-            if line.text.strip() and not _is_instrumental_line(line.text):
-                lines_to_translate.append((idx, line))
+        lines_to_translate = _get_translatable_lines(lyrics)
 
         if not lines_to_translate:
             logger.debug("No hay líneas para traducir")
@@ -460,16 +473,9 @@ class TranslationService:
         artist = lyrics.artist or "Unknown"
         title = lyrics.title or "Unknown"
 
-        # --- Recolectar texto y detectar idioma (igual que translate_lyrics) ---
-        all_text = " ".join(line.text for line in lyrics.lines if line.text.strip())
-        source_lang, detected_target = _detect_language(all_text)
-
-        if target_lang != "auto":
-            detected_target = target_lang
-            if detected_target == "es":
-                source_lang = "en"
-            elif detected_target == "en":
-                source_lang = "es"
+        source_lang, detected_target = _resolve_translation_direction(
+            lyrics, target_lang
+        )
 
         logger.info(
             f"Traducción progresiva: {source_lang}→{detected_target} "
@@ -492,11 +498,7 @@ class TranslationService:
         partial_key = self._get_partial_cache_key(artist, title)
         existing_partial = self._partial_cache.get(partial_key, {})
 
-        # Preparar líneas para traducción (filtrar instrumentales)
-        lines_to_translate: list[tuple[int, LyricLine]] = []
-        for idx, line in enumerate(lyrics.lines):
-            if line.text.strip() and not _is_instrumental_line(line.text):
-                lines_to_translate.append((idx, line))
+        lines_to_translate = _get_translatable_lines(lyrics)
 
         if not lines_to_translate:
             logger.debug("No hay líneas para traducir (progresivo)")
@@ -523,8 +525,6 @@ class TranslationService:
             return translation_dict
 
         # --- 3. Traducir pendientes en chunks ---
-        translator = self._get_translator(source=source_lang, target=detected_target)
-
         # Primer chunk más pequeño para latencia mínima inicial
         first_chunk_size = min(3, chunk_size)
         chunks: list[list[tuple[int, LyricLine]]] = []
@@ -544,19 +544,11 @@ class TranslationService:
                 return translation_dict
 
             texts = [line.text for _, line in chunk]
-            try:
-                translations = translator.translate_batch(texts)
-                if not translations:
-                    translations = []
-            except Exception as e:
-                logger.warning(f"Error en chunk translate, fallback uno-por-uno: {e}")
-                translations: list[Optional[str]] = []
-                for text in texts:
-                    try:
-                        result = translator.translate(text)
-                        translations.append(result or None)
-                    except Exception:
-                        translations.append(None)
+            translations = self._batch_translate(
+                texts,
+                source_lang=source_lang,
+                target_lang=detected_target,
+            )
 
             # Emitir resultados del chunk
             for i, (idx, line) in enumerate(chunk):

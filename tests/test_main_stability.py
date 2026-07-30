@@ -103,6 +103,28 @@ def test_new_lyrics_cancel_previous_translation_task(monkeypatch):
     assert app._translation_task is scheduled
 
 
+def test_manager_search_replaces_its_previous_task(monkeypatch):
+    app = LetraCancionApp.__new__(LetraCancionApp)
+    previous = PendingTask()
+    scheduled = PendingTask()
+    app._manager_search_task = previous
+
+    async def fake_search(artist, title):
+        return artist, title
+
+    def fake_create_task(coroutine):
+        coroutine.close()
+        return scheduled
+
+    app._search_manager_candidates = fake_search
+    monkeypatch.setattr("src.main.asyncio.create_task", fake_create_task)
+
+    app._on_manager_search_requested("Artist", "Song")
+
+    assert previous.cancelled is True
+    assert app._manager_search_task is scheduled
+
+
 def test_cancel_pending_tasks_stops_every_owned_async_task():
     async def scenario():
         app = LetraCancionApp.__new__(LetraCancionApp)
