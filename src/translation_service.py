@@ -105,6 +105,22 @@ class TranslationCache:
         except Exception as e:
             logger.warning(f"Error guardando traducción en caché: {e}")
 
+    def delete(self, artist: str, title: str) -> int:
+        """Elimina todas las traducciones persistidas para una canción."""
+        key = self._get_cache_key(artist, title)
+        count = 0
+        for cache_path in self.cache_dir.glob(f"{key}_*.json"):
+            try:
+                cache_path.unlink()
+                count += 1
+            except OSError as exc:
+                logger.warning(
+                    "Error eliminando traducción %s: %s",
+                    cache_path.name,
+                    exc,
+                )
+        return count
+
 
 def _is_spanish_text(text: str) -> bool:
     """
@@ -631,6 +647,14 @@ class TranslationService:
             except Exception:
                 pass
         logger.info(f"Caché de traducciones limpiado: {count} archivos eliminados")
+        return count
+
+    def invalidate_track(self, artist: str, title: str) -> int:
+        """Invalida traducciones completas y parciales de una canción."""
+        count = self.cache.delete(artist, title)
+        self._partial_cache.pop(
+            self._get_partial_cache_key(artist, title), None
+        )
         return count
 
 

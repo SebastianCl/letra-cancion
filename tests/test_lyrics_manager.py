@@ -1,0 +1,129 @@
+import pytest
+
+from PyQt6.QtCore import Qt
+
+from src.lrc_parser import LyricLine, LyricsData
+from src.lyrics_library import LyricsCandidate
+from src.models import TrackInfo
+from src.ui.lyrics_manager import (
+    LyricsManagerDialog,
+    format_timestamp,
+    parse_timestamp,
+)
+
+
+def make_candidate():
+    lyrics = LyricsData(
+        lines=[
+            LyricLine(5000, "First line"),
+            LyricLine(9000, "Second line"),
+        ],
+        artist="Radiohead",
+        title="Creep",
+        album="Pablo Honey",
+        is_synced=True,
+    )
+    return LyricsCandidate(
+        provider="LRCLIB",
+        provider_id="123",
+        artist="Radiohead",
+        title="Creep",
+        album="Pablo Honey",
+        duration_ms=238000,
+        is_synced=True,
+        lyrics_data=lyrics,
+    )
+
+
+def test_timestamp_format_and_parse():
+    assert format_timestamp(75430) == "01:15.43"
+    assert parse_timestamp("01:15.43") == 75430
+    assert parse_timestamp("1:15.4") == 75400
+    assert parse_timestamp("01:61.00") is None
+    assert parse_timestamp("invalid") is None
+
+
+def test_search_preview_and_apply_are_gated_by_current_track(qtbot):
+    dialog = LyricsManagerDialog()
+    qtbot.addWidget(dialog)
+    match = make_candidate()
+
+    with qtbot.waitSignal(dialog.preview_requested, timeout=1000):
+        dialog.set_search_results([match])
+    dialog.set_preview(match, match.lyrics_data)
+
+    assert dialog.preview_text.toPlainText().startswith("[ti:Creep]")
+    assert dialog.apply_button.isEnabled() is False
+
+    dialog.set_current_track(TrackInfo(title="Creep", artist="Radiohead"))
+
+    assert dialog.apply_button.isEnabled() is True
+    with qtbot.waitSignal(dialog.apply_requested, timeout=1000) as signal:
+        qtbot.mouseClick(dialog.apply_button, Qt.MouseButton.LeftButton)
+    assert signal.args[0] is match
+
+
+def test_process_plain_text_and_capture_advances_row(qtbot):
+    dialog = LyricsManagerDialog()
+    qtbot.addWidget(dialog)
+    dialog.set_current_track(TrackInfo(title="Halo", artist="Beyoncé"))
+    dialog.start_new_entry()
+    dialog.raw_lyrics_edit.setPlainText("First line\nSecond line\nThird line")
+
+    qtbot.mouseClick(
+        dialog.process_text_button, Qt.MouseButton.LeftButton
+    )
+
+    assert dialog.lines_table.rowCount() == 3
+    assert dialog.synced_check.isChecked() is False
+    assert dialog.capture_button.isEnabled() is True
+
+    dialog.lines_table.selectRow(0)
+    with qtbot.waitSignal(dialog.capture_requested, timeout=1000) as signal:
+        qtbot.mouseClick(dialog.capture_button, Qt.MouseButton.LeftButton)
+    assert signal.args == [0]
+
+    dialog.set_captured_timestamp(0, 12340)
+    assert dialog.lines_table.item(0, 0).text() == "00:12.34"
+    assert dialog.lines_table.currentRow() == 1
+    assert dialog.synced_check.isChecked() is True
+
+
+def test_lrc_import_path_populates_editor_and_builds_request(qtbot):
+    dialog = LyricsManagerDialog()
+    qtbot.addWidget(dialog)
+    dialog.editor_artist_edit.setText("Queen")
+    dialog.editor_title_edit.setText("Somebody to Love")
+    dialog.raw_lyrics_edit.setPlainText(
+        "[00:03.00]Can anybody find me\n"
+        "[00:08.50]Somebody to love"
+    )
+
+    dialog._process_raw_text()
+    request = dialog._build_save_request()
+
+    assert request.artist == "Queen"
+    assert request.lyrics_data.is_synced is True
+    assert [line.timestamp_ms for line in request.lyrics_data.lines] == [
+        3000,
+        8500,
+    ]
+
+
+def test_synced_editor_requires_strictly_increasing_times(qtbot):
+    dialog = LyricsManagerDialog()
+    qtbot.addWidget(dialog)
+    dialog.load_editor(
+        LyricsData(
+            lines=[
+                LyricLine(5000, "First"),
+                LyricLine(5000, "Second"),
+            ],
+            artist="Artist",
+            title="Song",
+            is_synced=True,
+        )
+    )
+
+    with pytest.raises(ValueError, match="estrictamente crecientes"):
+        dialog._build_save_request()

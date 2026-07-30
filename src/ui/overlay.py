@@ -581,6 +581,7 @@ class WindowTitleBar(QFrame):
     minimize_requested = pyqtSignal()
     maximize_requested = pyqtSignal()
     close_requested = pyqtSignal()
+    manage_lyrics_requested = pyqtSignal()
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -641,16 +642,19 @@ class WindowTitleBar(QFrame):
         controls = QWidget()
         controls.setFixedWidth(300)
         controls_layout = QHBoxLayout(controls)
-        controls_layout.setContentsMargins(140, 0, 0, 0)
+        controls_layout.setContentsMargins(92, 0, 0, 0)
         controls_layout.setSpacing(8)
+        self.manage_button = self._make_button("♫", "Gestionar letras")
         self.minimize_button = self._make_button("—", "Minimizar")
         self.maximize_button = self._make_button("□", "Maximizar")
         self.close_button = self._make_button("×", "Ocultar en la bandeja", close=True)
+        controls_layout.addWidget(self.manage_button)
         controls_layout.addWidget(self.minimize_button)
         controls_layout.addWidget(self.maximize_button)
         controls_layout.addWidget(self.close_button)
         layout.addWidget(controls)
 
+        self.manage_button.clicked.connect(self.manage_lyrics_requested)
         self.minimize_button.clicked.connect(self.minimize_requested)
         self.maximize_button.clicked.connect(self.maximize_requested)
         self.close_button.clicked.connect(self.close_requested)
@@ -772,6 +776,7 @@ class LyricsOverlay(QWidget):
     move_requested = pyqtSignal()
     sync_time_changed = pyqtSignal(int)
     quit_requested = pyqtSignal()
+    manage_lyrics_requested = pyqtSignal()
 
     def __init__(self, config: Optional[OverlayConfig] = None):
         super().__init__()
@@ -832,6 +837,9 @@ class LyricsOverlay(QWidget):
         self.title_bar.minimize_requested.connect(self.showMinimized)
         self.title_bar.maximize_requested.connect(self._on_maximize_clicked)
         self.title_bar.close_requested.connect(self._on_close_clicked)
+        self.title_bar.manage_lyrics_requested.connect(
+            self.manage_lyrics_requested
+        )
         container_layout.addWidget(self.title_bar)
 
         self.lyrics_host = QWidget(self.container)

@@ -19,11 +19,17 @@ import qasync
 from .window_detector import WindowTitleDetector
 from .models import TrackInfo, PlaybackInfo, PlayerState
 from .lyrics_service import LyricsService, LyricsSearchResult
+from .lyrics_library import (
+    LyricsCandidate,
+    clone_lyrics_data,
+    track_metadata_matches,
+)
 from .translation_service import TranslationService
 from .sync_engine import SyncEngine, SyncState, SyncMode
 from .hotkeys import HotkeyManager, HotkeyAction, KEYBOARD_AVAILABLE
 from .settings import SettingsManager
 from .ui.overlay import LyricsOverlay, OverlayConfig
+from .ui.lyrics_manager import LyricsManagerDialog, LyricsSaveRequest
 from .ui.tray import TrayIcon
 from .ui.brand import create_brand_icon
 
@@ -64,6 +70,7 @@ class LetraCancionApp:
         self.sync_engine: Optional[SyncEngine] = None
         self.hotkey_manager: Optional[HotkeyManager] = None
         self.overlay: Optional[LyricsOverlay] = None
+        self.lyrics_manager: Optional[LyricsManagerDialog] = None
         self.tray: Optional[TrayIcon] = None
 
         # Configuración persistente (H7)
@@ -76,6 +83,8 @@ class LetraCancionApp:
             self.settings_manager.settings.translation_enabled
         )
         self._translation_cancel_event: Optional[threading.Event] = None
+        self._manager_search_task: Optional[asyncio.Task] = None
+        self._manager_preview_task: Optional[asyncio.Task] = None
 
         # Qt App
         self.app: Optional[QApplication] = None
@@ -167,6 +176,8 @@ class LetraCancionApp:
             # 4. Crear UI — usar configuración persistente (H7)
             logger.info("Inicializando interfaz de usuario...")
             self.overlay = LyricsOverlay(self._build_overlay_config())
+            self.lyrics_manager = LyricsManagerDialog()
+            self.lyrics_manager.setWindowIcon(create_brand_icon())
             self.tray = TrayIcon(settings=self.settings_manager.settings)
 
             # Restaurar geometría únicamente si todavía intersecta una pantalla.
@@ -194,14 +205,35 @@ class LetraCancionApp:
                     -self.settings_manager.settings.offset_step_ms
                 )
             )
+            self.tray.manage_lyrics.connect(self._open_lyrics_manager)
             self.tray.open_settings.connect(self._apply_settings)
             self.tray.quit_app.connect(self._quit)
 
             # Conectar signals del overlay
             self.overlay.sync_time_changed.connect(self._on_sync_time_changed)
+            self.overlay.manage_lyrics_requested.connect(
+                self._open_lyrics_manager
+            )
             self.overlay.quit_requested.connect(self._quit)
             self.overlay.closed.connect(self._on_overlay_closed)
             self.tray.set_always_on_top(s.always_on_top)
+
+            # El gestor no accede directamente a red, disco ni detectores.
+            self.lyrics_manager.search_requested.connect(
+                self._on_manager_search_requested
+            )
+            self.lyrics_manager.preview_requested.connect(
+                self._on_manager_preview_requested
+            )
+            self.lyrics_manager.apply_requested.connect(
+                self._on_manager_apply_requested
+            )
+            self.lyrics_manager.save_requested.connect(
+                self._on_manager_save_requested
+            )
+            self.lyrics_manager.capture_requested.connect(
+                self._on_manager_capture_requested
+            )
 
             # 5. Inicializar hotkeys
             logger.info("Inicializando hotkeys...")
@@ -226,6 +258,8 @@ class LetraCancionApp:
     def _on_track_changed(self, track: Optional[TrackInfo]) -> None:
         """Callback cuando cambia la canción."""
         self._current_track = track
+        if self.lyrics_manager:
+            self.lyrics_manager.set_current_track(track)
 
         # Cancelar traducción en vuelo de la canción anterior
         if self._translation_cancel_event is not None:
@@ -279,97 +313,13 @@ class LetraCancionApp:
                 logger.info(
                     f"Letras encontradas ({result.provider}): {len(result.lyrics_data.lines)} líneas"
                 )
-
-                lyrics_data = result.lyrics_data
-
-                # Mostrar letra original inmediatamente
-                self.sync_engine.set_lyrics(lyrics_data, duration_ms or 0)
-                self.overlay.set_lyrics(lyrics_data, duration_ms or 0)
-                if not result.cached:
-                    self.tray.show_lyrics_found(result.provider)
-
-                # Lanzar traducción progresiva en segundo plano si está habilitada
-                if self._translation_enabled and self.translation_service:
-
-                    async def translate_and_update():
-                        try:
-                            logger.info("Traducción progresiva en segundo plano...")
-                            # H1: Indicador visual de traducción en progreso
-                            self.overlay.set_translating()
-
-                            # Crear evento de cancelación para esta traducción
-                            cancel_event = threading.Event()
-                            self._translation_cancel_event = cancel_event
-
-                            # Índice rápido timestamp → line_index
-                            ts_to_idx: dict[int, int] = {
-                                line.timestamp_ms: idx
-                                for idx, line in enumerate(lyrics_data.lines)
-                            }
-
-                            # Callback invocado desde el hilo de traducción por cada línea
-                            loop = asyncio.get_running_loop()
-
-                            def on_line_translated(
-                                line_index: int, timestamp_ms: int, translation: str
-                            ) -> None:
-                                """Inyecta la traducción en la UI desde el hilo principal."""
-                                loop.call_soon_threadsafe(
-                                    self.overlay.update_line_translation,
-                                    line_index,
-                                    translation,
-                                )
-
-                            # Ejecutar traducción progresiva en hilo separado
-                            translation_dict = await asyncio.to_thread(
-                                self.translation_service.translate_lyrics_progressive,
-                                lyrics_data,
-                                on_line_translated,
-                                cancel_event,
-                            )
-
-                            # Verificar cancelación
-                            if cancel_event.is_set():
-                                logger.debug(
-                                    "Traducción cancelada, descartando resultado final"
-                                )
-                                return
-
-                            # Verificar que siga siendo el mismo track
-                            if (
-                                self._current_track is None
-                                or not self._current_track.matches(track)
-                            ):
-                                logger.debug(
-                                    "Track cambió durante traducción, descartando resultado"
-                                )
-                                return
-
-                            translated_count = sum(
-                                1
-                                for line in lyrics_data.lines
-                                if getattr(line, "translation", None)
-                            )
-                            logger.info(
-                                f"Traducción progresiva completada: {translated_count} líneas"
-                            )
-
-                            # Actualizar sync_engine con lyrics ya traducidas in-place
-                            self.sync_engine.set_lyrics(
-                                lyrics_data, duration_ms or 0
-                            )
-                            self.overlay.set_translation_done()
-                        except Exception as e:
-                            logger.warning(f"Error en traducción: {e}")
-                            # H1/H9: Notificar al usuario que la traducción falló
-                            self.tray.show_notification(
-                                "Traducción no disponible",
-                                f"No se pudo traducir la letra: {e}",
-                                duration_ms=3000,
-                            )
-                            self.overlay.set_translation_done()
-
-                    asyncio.create_task(translate_and_update())
+                self._activate_lyrics(
+                    track,
+                    result.lyrics_data,
+                    duration_ms or 0,
+                    provider=result.provider,
+                    notify=not result.cached and not result.local,
+                )
             else:
                 logger.info("No se encontraron letras")
                 self.sync_engine.clear_lyrics()
@@ -380,6 +330,273 @@ class LetraCancionApp:
         except Exception as e:
             logger.error(f"Error buscando letras: {e}")
             self.overlay.set_no_lyrics_available()
+
+    def _activate_lyrics(
+        self,
+        track: TrackInfo,
+        lyrics_data,
+        duration_ms: int = 0,
+        provider: str = "",
+        notify: bool = False,
+    ) -> None:
+        """Reemplaza la letra activa y lanza su traducción si corresponde."""
+        if self._translation_cancel_event is not None:
+            self._translation_cancel_event.set()
+            self._translation_cancel_event = None
+
+        lyrics_data.artist = track.artist
+        lyrics_data.title = track.title
+        if track.album:
+            lyrics_data.album = track.album
+        self.sync_engine.set_lyrics(lyrics_data, duration_ms)
+        self.overlay.set_lyrics(lyrics_data, duration_ms)
+        if notify and provider:
+            self.tray.show_lyrics_found(provider)
+
+        if self._translation_enabled and self.translation_service:
+            asyncio.create_task(
+                self._translate_active_lyrics(track, lyrics_data, duration_ms)
+            )
+
+    async def _translate_active_lyrics(
+        self, track: TrackInfo, lyrics_data, duration_ms: int
+    ) -> None:
+        """Traduce progresivamente la letra activa sin bloquear la interfaz."""
+        cancel_event = threading.Event()
+        self._translation_cancel_event = cancel_event
+        try:
+            logger.info("Traducción progresiva en segundo plano...")
+            self.overlay.set_translating()
+            loop = asyncio.get_running_loop()
+
+            def on_line_translated(
+                line_index: int, timestamp_ms: int, translation: str
+            ) -> None:
+                loop.call_soon_threadsafe(
+                    self.overlay.update_line_translation,
+                    line_index,
+                    translation,
+                )
+
+            await asyncio.to_thread(
+                self.translation_service.translate_lyrics_progressive,
+                lyrics_data,
+                on_line_translated,
+                cancel_event,
+            )
+            if cancel_event.is_set():
+                logger.debug("Traducción cancelada, descartando resultado final")
+                return
+            if (
+                self._current_track is None
+                or not self._current_track.matches(track)
+            ):
+                logger.debug(
+                    "Track cambió durante traducción, descartando resultado"
+                )
+                return
+
+            translated_count = sum(
+                1
+                for line in lyrics_data.lines
+                if getattr(line, "translation", None)
+            )
+            logger.info(
+                "Traducción progresiva completada: %s líneas",
+                translated_count,
+            )
+            self.sync_engine.set_lyrics(lyrics_data, duration_ms)
+            self.overlay.set_translation_done()
+        except Exception as exc:
+            if cancel_event.is_set():
+                return
+            logger.warning("Error en traducción: %s", exc)
+            self.tray.show_notification(
+                "Traducción no disponible",
+                f"No se pudo traducir la letra: {exc}",
+                duration_ms=3000,
+            )
+            self.overlay.set_translation_done()
+        finally:
+            if self._translation_cancel_event is cancel_event:
+                self._translation_cancel_event = None
+
+    @staticmethod
+    def _track_matches_metadata(
+        track: Optional[TrackInfo], artist: str, title: str
+    ) -> bool:
+        if track is None:
+            return False
+        return track_metadata_matches(
+            track.artist,
+            track.title,
+            artist,
+            title,
+        )
+
+    def _open_lyrics_manager(self) -> None:
+        if self.lyrics_manager:
+            self.lyrics_manager.show_for_track(self._current_track)
+
+    def _on_manager_search_requested(
+        self, artist: str, title: str
+    ) -> None:
+        if self._manager_search_task and not self._manager_search_task.done():
+            self._manager_search_task.cancel()
+        self._manager_search_task = asyncio.create_task(
+            self._search_manager_candidates(artist, title)
+        )
+
+    async def _search_manager_candidates(
+        self, artist: str, title: str
+    ) -> None:
+        try:
+            candidates = await self.lyrics_service.search_candidates(
+                artist, title
+            )
+            if self.lyrics_manager:
+                self.lyrics_manager.set_search_results(candidates)
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:
+            logger.error("Error en búsqueda manual de letras: %s", exc)
+            if self.lyrics_manager:
+                self.lyrics_manager.set_search_error(str(exc))
+
+    def _on_manager_preview_requested(
+        self, candidate: LyricsCandidate
+    ) -> None:
+        if self._manager_preview_task and not self._manager_preview_task.done():
+            self._manager_preview_task.cancel()
+        self._manager_preview_task = asyncio.create_task(
+            self._load_manager_preview(candidate)
+        )
+
+    async def _load_manager_preview(
+        self, candidate: LyricsCandidate
+    ) -> None:
+        try:
+            lyrics = await self.lyrics_service.load_candidate(candidate)
+            if self.lyrics_manager:
+                self.lyrics_manager.set_preview(candidate, lyrics)
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:
+            logger.error("Error cargando previsualización: %s", exc)
+            if self.lyrics_manager:
+                self.lyrics_manager.set_preview(
+                    candidate, None, error=str(exc)
+                )
+
+    def _current_duration_ms(self) -> int:
+        playback = getattr(self.detector, "current_playback", None)
+        return max(0, playback.duration_ms) if playback else 0
+
+    def _on_manager_apply_requested(
+        self, candidate: LyricsCandidate
+    ) -> None:
+        if (
+            self._current_track is None
+            or candidate.lyrics_data is None
+            or not self._track_matches_metadata(
+                self._current_track, candidate.artist, candidate.title
+            )
+        ):
+            if self.tray:
+                self.tray.show_error(
+                    "La coincidencia no corresponde a la canción actual de Qobuz."
+                )
+            return
+
+        lyrics = clone_lyrics_data(candidate.lyrics_data)
+        duration_ms = candidate.duration_ms or self._current_duration_ms()
+        if not candidate.is_local:
+            lyrics.artist = self._current_track.artist
+            lyrics.title = self._current_track.title
+            lyrics.album = self._current_track.album or candidate.album or None
+            self.lyrics_service.cache.save(
+                self._current_track.artist,
+                self._current_track.title,
+                lyrics,
+            )
+        self._activate_lyrics(
+            self._current_track,
+            lyrics,
+            duration_ms,
+            provider=candidate.provider,
+        )
+        self.overlay.show_offset_indicator(0)
+
+    def _on_manager_save_requested(
+        self, request: LyricsSaveRequest
+    ) -> None:
+        if self.lyrics_service.has_user_lyrics(
+            request.artist, request.title
+        ):
+            if not self.lyrics_manager.confirm_overwrite(
+                request.artist, request.title
+            ):
+                return
+        try:
+            saved = self.lyrics_service.save_user_lyrics(
+                artist=request.artist,
+                title=request.title,
+                album=request.album,
+                duration_ms=request.duration_ms,
+                lyrics_data=request.lyrics_data,
+                source=request.source,
+            )
+            if self.translation_service:
+                self.translation_service.invalidate_track(
+                    request.artist, request.title
+                )
+        except Exception as exc:
+            logger.error("Error guardando letra local: %s", exc)
+            QMessageBox.critical(
+                self.lyrics_manager,
+                "No se pudo guardar",
+                f"No se pudo guardar la letra local.\n\n{exc}",
+            )
+            return
+
+        self.lyrics_manager.show_save_success(
+            saved.artist, saved.title
+        )
+        if self.tray:
+            self.tray.show_notification(
+                "Letra guardada",
+                f"{saved.artist} — {saved.title}",
+                duration_ms=2500,
+            )
+
+        if self._track_matches_metadata(
+            self._current_track, saved.artist, saved.title
+        ):
+            duration_ms = saved.duration_ms or self._current_duration_ms()
+            self._activate_lyrics(
+                self._current_track,
+                clone_lyrics_data(saved.lyrics_data),
+                duration_ms,
+                provider="Biblioteca local",
+            )
+
+    def _on_manager_capture_requested(self, row: int) -> None:
+        if not self.lyrics_manager or self._current_track is None:
+            return
+        position_ms = 0
+        position_getter = getattr(
+            self.detector, "get_interpolated_position_ms", None
+        )
+        if callable(position_getter):
+            try:
+                position_ms = max(0, int(position_getter()))
+            except Exception as exc:
+                logger.debug("No se pudo interpolar la posición: %s", exc)
+        if position_ms == 0:
+            playback = getattr(self.detector, "current_playback", None)
+            if playback is not None:
+                position_ms = max(0, int(playback.position_ms))
+        self.lyrics_manager.set_captured_timestamp(row, position_ms)
 
     def _on_playback_changed(self, playback: PlaybackInfo) -> None:
         """Callback cuando cambia el estado de reproducción."""
@@ -533,6 +750,12 @@ class LetraCancionApp:
 
         # Detener componentes primero
         try:
+            for task in (
+                self._manager_search_task,
+                self._manager_preview_task,
+            ):
+                if task and not task.done():
+                    task.cancel()
             if self.sync_engine:
                 self.sync_engine.stop()
             if self.hotkey_manager:
@@ -540,6 +763,8 @@ class LetraCancionApp:
             if self.overlay:
                 self.overlay.hide()
                 self.overlay.force_close()
+            if self.lyrics_manager:
+                self.lyrics_manager.close()
             if self.tray:
                 self.tray.hide()
         except Exception as e:

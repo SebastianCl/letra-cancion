@@ -16,6 +16,8 @@ Detecta automáticamente la canción que estás reproduciendo en Qobuz, busca la
 - **Ayuda integrada** con referencia rápida de atajos
 - **Fallback inteligente**: si no hay letra sincronizada, muestra scroll estimado
 - **Caché local** para evitar búsquedas repetidas
+- **Gestor de letras** para buscar cualquier canción, previsualizar resultados y guardar versiones personales
+- **Editor LRC** con pegado, importación, tiempos manuales y captura en vivo desde Qobuz
 - **Persistencia** de posición, tamaño, estado maximizado y preferencias de ventana
 
 ## 🚀 Instalación y ejecución
@@ -65,6 +67,25 @@ El ejecutable se crea en `dist\LetraCancion\LetraCancion.exe`.
 | `Ctrl+Alt+↓` | Adelantar letras (si van atrasadas) |
 | `Ctrl+Alt+R` | Resetear sincronización |
 | `Ctrl+Shift+Q` | Salir de la aplicación |
+| `F8` | Capturar el tiempo actual en el editor de letras |
+
+## 📝 Gestionar letras
+
+Abre **Gestionar letras** desde el botón `♫` de la ventana principal o desde
+el menú del icono de la bandeja.
+
+- Busca por artista y título en la biblioteca local, LRCLIB y NetEase.
+- Previsualiza una coincidencia antes de aplicarla, guardarla o editarla.
+- Agrega una letra pegando texto plano, contenido LRC o importando un archivo
+  `.lrc`.
+- Edita el texto y los tiempos en formato `mm:ss.xx`.
+- Mientras el editor coincida con la canción actual, usa **F8** o
+  **Usar tiempo actual** para marcar la fila seleccionada y avanzar a la
+  siguiente.
+
+Las versiones personales tienen prioridad sobre las fuentes en línea y se
+guardan en `~/.lyrics-cache/library/`. No se eliminan al limpiar el caché de
+letras descargadas.
 
 ## 🖱️ Interacciones del mouse
 
@@ -88,6 +109,7 @@ letra-cancion/
 │   ├── detector.py          # Detección via SMTC
 │   ├── window_detector.py   # Detección por título (fallback)
 │   ├── lyrics_service.py    # Búsqueda de letras
+│   ├── lyrics_library.py    # Biblioteca local de letras personales
 │   ├── translation_service.py # Traducción EN↔ES
 │   ├── sync_engine.py       # Motor de sincronización
 │   ├── lrc_parser.py        # Parser formato LRC
@@ -96,6 +118,7 @@ letra-cancion/
 │   └── ui/
 │       ├── __init__.py
 │       ├── overlay.py       # Ventana inmersiva de letras
+│       ├── lyrics_manager.py # Búsqueda, previsualización y editor
 │       ├── brand.py         # Identidad vectorial compartida
 │       ├── tray.py          # Icono en bandeja
 │       └── settings.py      # Diálogos de config y ayuda
@@ -119,7 +142,8 @@ Opciones disponibles:
 
 La configuración se guarda automáticamente en `~/.lyrics-cache/settings.json`.
 
-Las letras traducidas y las respuestas reutilizables también se almacenan localmente en `~/.lyrics-cache/`; no deben confirmarse en Git.
+Las letras traducidas, las respuestas reutilizables y la biblioteca personal
+se almacenan localmente en `~/.lyrics-cache/`; no deben confirmarse en Git.
 
 ### Ajuste de sincronización
 
@@ -184,4 +208,10 @@ Comprobación rápida de sintaxis e importaciones:
 python -m compileall src launcher.py
 ```
 
-Actualmente no hay una suite automatizada configurada. Para cambios de lógica, añade pruebas específicas en `tests/` con `pytest`, simulando las APIs externas y los servicios de Windows.
+Ejecuta la suite automatizada con:
+
+```powershell
+python -m pytest
+```
+
+Las pruebas simulan las APIs externas y los servicios de Windows.

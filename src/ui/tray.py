@@ -41,6 +41,7 @@ class TrayIcon(QObject):
     offset_reset = pyqtSignal()
     offset_increase = pyqtSignal()
     offset_decrease = pyqtSignal()
+    manage_lyrics = pyqtSignal()
     open_settings = pyqtSignal()
     quit_app = pyqtSignal()
 
@@ -96,6 +97,12 @@ class TrayIcon(QObject):
         self._toggle_action = QAction("Ocultar ventana")
         self._toggle_action.triggered.connect(self._on_toggle_clicked)
         self._menu.addAction(self._toggle_action)
+
+        manage_lyrics_action = QAction("Gestionar letras")
+        manage_lyrics_action.triggered.connect(
+            lambda: self.manage_lyrics.emit()
+        )
+        self._menu.addAction(manage_lyrics_action)
 
         # Toggle traducción (H6: hacer visible, antes solo Ctrl+T invisible)
         self._translation_action = QAction("Traducción: activada")

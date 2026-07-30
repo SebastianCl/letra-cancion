@@ -11,51 +11,37 @@ Incluye caché local para evitar consultas repetidas.
 import asyncio
 import hashlib
 import logging
-import re
 import ssl
-import unicodedata
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Optional
-from urllib.parse import quote
 
 import aiohttp
 import certifi
 
 from .lrc_parser import LRCParser, LyricsData
+from .lyrics_library import (
+    LyricsCandidate,
+    UserLyricsEntry,
+    UserLyricsLibrary,
+    clone_lyrics_data,
+    metadata_text_matches,
+    normalize_track_text,
+    track_metadata_matches,
+)
 
 logger = logging.getLogger(__name__)
 
 
 def _normalize_metadata(value: Optional[str]) -> str:
     """Normaliza metadatos musicales para compararlos de forma tolerante."""
-    if not value:
-        return ""
-    value = unicodedata.normalize("NFKD", value)
-    value = "".join(char for char in value if not unicodedata.combining(char))
-    value = value.casefold()
-    return " ".join(re.findall(r"\w+", value, flags=re.UNICODE))
+    return normalize_track_text(value)
 
 
 def _metadata_matches(expected: str, candidate: Optional[str]) -> bool:
     """Evita falsos positivos sin penalizar pequeñas variantes de escritura."""
-    expected_normalized = _normalize_metadata(expected)
-    candidate_normalized = _normalize_metadata(candidate)
-    if not expected_normalized or not candidate_normalized:
-        return False
-    if expected_normalized == candidate_normalized:
-        return True
-
-    shorter, longer = sorted(
-        (expected_normalized, candidate_normalized), key=len
-    )
-    if len(shorter) >= 4 and f" {shorter} " in f" {longer} ":
-        return True
-
-    return SequenceMatcher(
-        None, expected_normalized, candidate_normalized
-    ).ratio() >= 0.82
+    return metadata_text_matches(expected, candidate or "")
 
 
 def _track_matches(
@@ -65,8 +51,11 @@ def _track_matches(
     candidate_title: Optional[str],
 ) -> bool:
     """Comprueba que un resultado corresponde realmente a la pista solicitada."""
-    return _metadata_matches(artist, candidate_artist) and _metadata_matches(
-        title, candidate_title
+    return track_metadata_matches(
+        artist,
+        title,
+        candidate_artist or "",
+        candidate_title or "",
     )
 
 
@@ -77,6 +66,7 @@ class LyricsSearchResult:
     lyrics_data: LyricsData
     provider: str
     cached: bool = False
+    local: bool = False
 
 
 class LyricsCache:
@@ -165,6 +155,21 @@ class LyricsCache:
             logger.debug(f"Guardado en caché: {artist} - {title}")
         except Exception as e:
             logger.warning(f"Error guardando en caché: {e}")
+
+    def delete(self, artist: str, title: str) -> int:
+        """Elimina las variantes descargadas de una canción."""
+        count = 0
+        for synced in (True, False):
+            path = self._get_cache_path(artist, title, synced)
+            if path.exists():
+                try:
+                    path.unlink()
+                    count += 1
+                except OSError as exc:
+                    logger.warning(
+                        "Error eliminando caché %s: %s", path.name, exc
+                    )
+        return count
 
     def clear(self) -> int:
         """
@@ -282,6 +287,55 @@ class LRCLIBProvider:
 
         return None
 
+    async def search_candidates(
+        self, artist: str, title: str, limit: int = 10
+    ) -> list[LyricsCandidate]:
+        """Devuelve coincidencias de LRCLIB sin forzar una selección exacta."""
+        try:
+            async with self.session.get(
+                f"{self.BASE_URL}/search",
+                params={"q": f"{artist} {title}"},
+                timeout=aiohttp.ClientTimeout(total=10),
+                ssl=self.ssl_context,
+            ) as response:
+                if response.status != 200:
+                    return []
+                results = await response.json()
+        except Exception as exc:
+            logger.warning("LRCLIB candidate search exception: %s", exc)
+            return []
+
+        candidates: list[LyricsCandidate] = []
+        for result in (results or [])[:limit]:
+            lyrics_data = self._parse_response(result)
+            if lyrics_data is None:
+                continue
+            duration_ms = int(float(result.get("duration") or 0) * 1000)
+            candidates.append(
+                LyricsCandidate(
+                    provider="LRCLIB",
+                    provider_id=str(
+                        result.get("id")
+                        or f"{result.get('artistName', '')}|"
+                        f"{result.get('trackName', '')}"
+                    ),
+                    artist=str(result.get("artistName") or ""),
+                    title=str(result.get("trackName") or ""),
+                    album=str(result.get("albumName") or ""),
+                    duration_ms=duration_ms,
+                    is_synced=lyrics_data.is_synced,
+                    lyrics_data=lyrics_data,
+                )
+            )
+        return candidates
+
+    async def load_candidate(
+        self, candidate: LyricsCandidate
+    ) -> Optional[LyricsData]:
+        if candidate.lyrics_data is None:
+            return None
+        return clone_lyrics_data(candidate.lyrics_data)
+
     def _parse_response(self, data: dict) -> Optional[LyricsData]:
         """Parsea la respuesta de LRCLIB a LyricsData."""
         synced_lyrics = data.get("syncedLyrics")
@@ -352,6 +406,69 @@ class NetEaseProvider:
             lyrics.title = song.get("title")
             lyrics.artist = song.get("artist")
             lyrics.album = song.get("album")
+        return lyrics
+
+    async def search_candidates(
+        self, artist: str, title: str, limit: int = 10
+    ) -> list[LyricsCandidate]:
+        """Lista canciones de NetEase; la letra se carga al previsualizar."""
+        try:
+            data = {
+                "s": f"{artist} {title}",
+                "type": 1,
+                "limit": max(1, min(limit, 20)),
+                "offset": 0,
+            }
+            async with self.session.post(
+                self.SEARCH_URL,
+                data=data,
+                headers=self.headers,
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as response:
+                if response.status != 200:
+                    return []
+                result = await response.json(content_type=None)
+        except Exception as exc:
+            logger.warning("NetEase candidate search error: %s", exc)
+            return []
+
+        candidates: list[LyricsCandidate] = []
+        for song in result.get("result", {}).get("songs", [])[:limit]:
+            artists = [
+                str(item.get("name") or "")
+                for item in song.get("artists", [])
+                if item.get("name")
+            ]
+            album = song.get("album") or {}
+            candidates.append(
+                LyricsCandidate(
+                    provider="NetEase",
+                    provider_id=str(song.get("id") or ""),
+                    artist=", ".join(artists),
+                    title=str(song.get("name") or ""),
+                    album=str(album.get("name") or ""),
+                    duration_ms=max(0, int(song.get("duration") or 0)),
+                    is_synced=None,
+                )
+            )
+        return [
+            candidate
+            for candidate in candidates
+            if candidate.provider_id and candidate.artist and candidate.title
+        ]
+
+    async def load_candidate(
+        self, candidate: LyricsCandidate
+    ) -> Optional[LyricsData]:
+        try:
+            song_id = int(candidate.provider_id)
+        except (TypeError, ValueError):
+            return None
+        lyrics = await self._get_lyrics(song_id, candidate.duration_ms or None)
+        if lyrics:
+            lyrics.artist = candidate.artist
+            lyrics.title = candidate.title
+            lyrics.album = candidate.album or None
         return lyrics
 
     async def _search_song(self, artist: str, title: str) -> Optional[dict]:
@@ -457,7 +574,9 @@ class LyricsService:
         Args:
             cache_dir: Directorio para el caché local.
         """
-        self.cache = LyricsCache(cache_dir)
+        base_dir = cache_dir or Path.home() / ".lyrics-cache"
+        self.cache = LyricsCache(base_dir)
+        self.library = UserLyricsLibrary(base_dir / "library")
         self._session: Optional[aiohttp.ClientSession] = None
         self._providers: list = []
 
@@ -514,7 +633,17 @@ class LyricsService:
             logger.warning("Se requiere artista y título para buscar letras")
             return None
 
-        # 1. Buscar en caché
+        # 1. Buscar una personalización local
+        local_entry = self.library.get(artist, title)
+        if local_entry and local_entry.lyrics_data.lines:
+            return LyricsSearchResult(
+                lyrics_data=clone_lyrics_data(local_entry.lyrics_data),
+                provider="Biblioteca local",
+                cached=False,
+                local=True,
+            )
+
+        # 2. Buscar en caché
         cached = self.cache.get(artist, title)
         if cached:
             if not _track_matches(
@@ -529,7 +658,7 @@ class LyricsService:
                     lyrics_data=cached, provider="cache", cached=True
                 )
 
-        # 2. Buscar en proveedores
+        # 3. Buscar en proveedores
         duration_seconds = duration_ms // 1000 if duration_ms else None
         plain_fallback: Optional[tuple[str, LyricsData]] = None
 
@@ -568,7 +697,7 @@ class LyricsService:
             except Exception as e:
                 logger.warning(f"Error en proveedor {provider_name}: {e}")
 
-        # 3. Usar fallback plano si prefer_synced estaba activo
+        # 4. Usar fallback plano si prefer_synced estaba activo
         if prefer_synced and plain_fallback:
             provider_name, result = plain_fallback
             self.cache.save(artist, title, result)
@@ -579,7 +708,7 @@ class LyricsService:
                 lyrics_data=result, provider=provider_name, cached=False
             )
 
-        # 4. Segunda pasada aceptando cualquier tipo (solo si no hubo ningún resultado)
+        # 5. Segunda pasada aceptando cualquier tipo (solo si no hubo ningún resultado)
         if prefer_synced and plain_fallback is None:
             logger.debug("No se encontraron resultados, reintentando sin preferencia...")
             for provider_name, provider in self._providers:
@@ -603,6 +732,127 @@ class LyricsService:
 
         logger.info(f"No se encontraron letras para: {artist} - {title}")
         return None
+
+    async def search_candidates(
+        self,
+        artist: str,
+        title: str,
+        limit: int = 20,
+    ) -> list[LyricsCandidate]:
+        """Busca resultados locales y remotos para el gestor de letras."""
+        if not artist.strip() or not title.strip():
+            return []
+
+        local_candidates = self.library.search(artist, title, limit=limit)
+        tasks = [
+            provider.search_candidates(artist, title, limit=min(limit, 10))
+            for _, provider in self._providers
+            if hasattr(provider, "search_candidates")
+        ]
+        remote_groups: list = []
+        if tasks:
+            remote_groups = list(
+                await asyncio.gather(*tasks, return_exceptions=True)
+            )
+
+        combined = list(local_candidates)
+        for group in remote_groups:
+            if isinstance(group, Exception):
+                logger.warning("Un proveedor falló buscando candidatos: %s", group)
+                continue
+            combined.extend(group)
+
+        provider_priority = {
+            "Biblioteca local": 3,
+            "LRCLIB": 2,
+            "NetEase": 1,
+        }
+        expected_artist = normalize_track_text(artist)
+        expected_title = normalize_track_text(title)
+
+        def rank(candidate: LyricsCandidate) -> tuple:
+            candidate_artist = normalize_track_text(candidate.artist)
+            candidate_title = normalize_track_text(candidate.title)
+            exact = int(
+                candidate_artist == expected_artist
+                and candidate_title == expected_title
+            )
+            title_ratio = SequenceMatcher(
+                None, expected_title, candidate_title
+            ).ratio()
+            artist_ratio = SequenceMatcher(
+                None, expected_artist, candidate_artist
+            ).ratio()
+            return (
+                exact,
+                provider_priority.get(candidate.provider, 0),
+                int(candidate.is_synced is True),
+                title_ratio * 0.6 + artist_ratio * 0.4,
+            )
+
+        combined.sort(key=rank, reverse=True)
+        deduplicated: list[LyricsCandidate] = []
+        seen: set[tuple[str, str]] = set()
+        for candidate in combined:
+            identity = candidate.identity[:2]
+            if identity in seen:
+                continue
+            seen.add(identity)
+            deduplicated.append(candidate)
+            if len(deduplicated) >= limit:
+                break
+        return deduplicated
+
+    async def load_candidate(
+        self, candidate: LyricsCandidate
+    ) -> Optional[LyricsData]:
+        """Carga la letra completa de una coincidencia seleccionada."""
+        if candidate.lyrics_data is not None:
+            return clone_lyrics_data(candidate.lyrics_data)
+        if candidate.is_local:
+            entry = self.library.get(candidate.artist, candidate.title)
+            return (
+                clone_lyrics_data(entry.lyrics_data)
+                if entry is not None
+                else None
+            )
+
+        for provider_name, provider in self._providers:
+            if provider_name != candidate.provider:
+                continue
+            if not hasattr(provider, "load_candidate"):
+                return None
+            lyrics = await provider.load_candidate(candidate)
+            if lyrics:
+                candidate.lyrics_data = clone_lyrics_data(lyrics)
+                candidate.is_synced = lyrics.is_synced
+            return lyrics
+        return None
+
+    def has_user_lyrics(self, artist: str, title: str) -> bool:
+        return self.library.exists(artist, title)
+
+    def save_user_lyrics(
+        self,
+        artist: str,
+        title: str,
+        lyrics_data: LyricsData,
+        album: str = "",
+        duration_ms: int = 0,
+        source: str = "manual",
+    ) -> UserLyricsEntry:
+        """Guarda una versión local prioritaria e invalida descargas previas."""
+        entry = UserLyricsEntry(
+            artist=artist,
+            title=title,
+            album=album,
+            duration_ms=duration_ms,
+            source=source,
+            lyrics_data=clone_lyrics_data(lyrics_data),
+        )
+        saved = self.library.save(entry)
+        self.cache.delete(artist, title)
+        return saved
 
     async def search_with_fallback(
         self,

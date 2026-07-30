@@ -127,6 +127,61 @@ class LyricsProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(lyrics)
         self.assertEqual(session.get_calls, [])
 
+    async def test_lrclib_lists_candidates_for_manual_search(self):
+        response = FakeResponse(
+            [
+                {
+                    "id": 42,
+                    "trackName": "Creep",
+                    "artistName": "Radiohead",
+                    "albumName": "Pablo Honey",
+                    "duration": 238,
+                    "syncedLyrics": "[00:01.00]When you were here before",
+                    "plainLyrics": "When you were here before",
+                }
+            ]
+        )
+        session = FakeSession(get_response=response)
+        provider = LRCLIBProvider(
+            session, ssl_context=sentinel.ssl_context
+        )
+
+        candidates = await provider.search_candidates("Radiohead", "Creep")
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0].provider_id, "42")
+        self.assertEqual(candidates[0].duration_ms, 238000)
+        self.assertTrue(candidates[0].is_synced)
+        self.assertEqual(
+            session.get_calls[0][1]["ssl"], sentinel.ssl_context
+        )
+
+    async def test_netease_lists_candidates_without_fetching_each_lyric(self):
+        response = FakeResponse(
+            {
+                "result": {
+                    "songs": [
+                        {
+                            "id": 123,
+                            "name": "Creep",
+                            "artists": [{"name": "Radiohead"}],
+                            "album": {"name": "Pablo Honey"},
+                            "duration": 238000,
+                        }
+                    ]
+                }
+            }
+        )
+        session = FakeSession(post_response=response)
+        provider = NetEaseProvider(session)
+
+        candidates = await provider.search_candidates("Radiohead", "Creep")
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0].provider_id, "123")
+        self.assertIsNone(candidates[0].is_synced)
+        self.assertEqual(session.get_calls, [])
+
 
 class MetadataMatchingTests(unittest.TestCase):
     def test_track_matches_normalized_metadata(self):
