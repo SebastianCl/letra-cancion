@@ -786,28 +786,6 @@ class LyricsService:
                 lyrics_data=result, provider=provider_name, cached=False
             )
 
-        # 5. Segunda pasada aceptando cualquier tipo (solo si no hubo ningún resultado)
-        if prefer_synced and plain_fallback is None:
-            logger.debug("No se encontraron resultados, reintentando sin preferencia...")
-            for provider_name, provider in self._providers:
-                try:
-                    result = await provider.search(
-                        artist=artist,
-                        title=title,
-                        album=album,
-                        duration_seconds=duration_seconds,
-                    )
-                    if result:
-                        self.cache.save(artist, title, result)
-                        logger.info(
-                            f"Letras encontradas en {provider_name} para: {artist} - {title}"
-                        )
-                        return LyricsSearchResult(
-                            lyrics_data=result, provider=provider_name, cached=False
-                        )
-                except Exception as e:
-                    logger.warning(f"Error en proveedor {provider_name}: {e}")
-
         logger.info(f"No se encontraron letras para: {artist} - {title}")
         return None
 

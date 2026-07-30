@@ -19,6 +19,15 @@ class CandidateProvider:
         return candidate.lyrics_data
 
 
+class MissingLyricsProvider:
+    def __init__(self):
+        self.search_calls = 0
+
+    async def search(self, **kwargs):
+        self.search_calls += 1
+        return None
+
+
 def candidate(provider, artist, title, synced=True):
     return LyricsCandidate(
         provider=provider,
@@ -90,3 +99,16 @@ def test_load_candidate_returns_independent_copy(tmp_path):
     loaded.lines[0].text = "Changed"
 
     assert match.lyrics_data.lines[0].text == "First line"
+
+
+def test_search_does_not_repeat_providers_when_no_lyrics_are_found(tmp_path):
+    service = LyricsService(tmp_path)
+    first = MissingLyricsProvider()
+    second = MissingLyricsProvider()
+    service._providers = [("First", first), ("Second", second)]
+
+    result = asyncio.run(service.search("Artist", "Song"))
+
+    assert result is None
+    assert first.search_calls == 1
+    assert second.search_calls == 1
