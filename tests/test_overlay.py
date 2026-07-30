@@ -176,6 +176,18 @@ def test_set_translation_enabled_updates_icon_and_lines(qtbot):
     assert all(label._translation_visible for label in window.line_labels)
 
 
+def test_translation_control_is_keyboard_accessible(qtbot):
+    window = LyricsOverlay()
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.wait(1)
+    button = window.title_bar.translation_button
+
+    assert button.focusPolicy() == Qt.FocusPolicy.StrongFocus
+    with qtbot.waitSignal(window.translation_toggle_requested, timeout=1000):
+        qtbot.keyClick(button, Qt.Key.Key_Space)
+
+
 def test_always_on_top_and_geometry_validation(qtbot):
     window = LyricsOverlay(OverlayConfig(always_on_top=False))
     qtbot.addWidget(window)

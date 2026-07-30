@@ -2,13 +2,13 @@
 
 Sistema de letras sincronizadas para **Qobuz** en Windows.
 
-Detecta automáticamente la canción que estás reproduciendo en Qobuz, busca la letra correspondiente y la muestra en una ventana inmersiva sincronizada con la música. Traduce automáticamente las letras entre inglés y español.
+Detecta automáticamente la canción que estás reproduciendo en Qobuz, busca la letra correspondiente y la muestra en una ventana inmersiva sincronizada con la música. Traduce automáticamente letras en inglés o italiano al español; al activarla manualmente, también traduce letras en español al inglés.
 
 ## ✨ Características
 
 - **Detección automática** de la canción via Windows Media Session (SMTC), con fallback por título de ventana
 - **Letras sincronizadas** desde LRCLIB y NetEase Music
-- **Traducción bidireccional** inglés↔español automática (con caché local)
+- **Traducción automática** inglés→español e italiano→español, con español→inglés al activarla manualmente (con caché local)
 - **Ventana inmersiva responsive** con traducciones apiladas y progreso de reproducción
 - **Modo “Siempre encima” opcional**, desactivado por defecto
 - **Hotkeys globales** para controlar desde cualquier aplicación
@@ -120,7 +120,7 @@ letra-cancion/
 │   ├── window_detector.py   # Detección por título (fallback)
 │   ├── lyrics_service.py    # Búsqueda de letras
 │   ├── lyrics_library.py    # Biblioteca local de letras personales
-│   ├── translation_service.py # Traducción EN↔ES
+│   ├── translation_service.py # Detección y traducción de letras
 │   ├── sync_engine.py       # Motor de sincronización
 │   ├── lrc_parser.py        # Parser formato LRC
 │   ├── hotkeys.py           # Hotkeys globales

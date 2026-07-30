@@ -365,7 +365,7 @@ class LyricLabel(QWidget):
             )
         required_height += 7  # separación entre original y traducción
         if self._focus_rule.isVisible():
-            required_height += self._focus_rule.sizeHint().height() + 7
+            required_height += self._focus_rule.minimumHeight() + 7
 
         base_height = 142 if self._current else 88
         self.setMinimumHeight(max(base_height, required_height + 4))
@@ -719,7 +719,7 @@ class TranslationButton(QAbstractButton):
         self._enabled_state = True
         self.setFixedSize(36, 30)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
     def set_translation_enabled(self, enabled: bool) -> None:
         if self._enabled_state != enabled:
