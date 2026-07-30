@@ -15,7 +15,8 @@ Detecta automáticamente la canción que estás reproduciendo en Qobuz, busca la
 - **Panel de configuración** para personalizar apariencia y comportamiento
 - **Ayuda integrada** con referencia rápida de atajos
 - **Fallback inteligente**: si no hay letra sincronizada, muestra scroll estimado
-- **Caché local** para evitar búsquedas repetidas
+- **Caché local y funcionamiento offline**: cada letra encontrada se guarda
+  en `~/.lyrics-cache/` y se reutiliza aunque no haya conexión a Internet
 - **Gestor de letras** para buscar cualquier canción, previsualizar resultados y guardar versiones personales
 - **Editor LRC** con pegado, importación, tiempos manuales y captura en vivo desde Qobuz
 - **Persistencia** de posición, tamaño, estado maximizado y preferencias de ventana

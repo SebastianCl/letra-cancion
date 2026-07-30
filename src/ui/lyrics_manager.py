@@ -97,6 +97,7 @@ class LyricsManagerDialog(QDialog):
     """Ventana persistente que deja continuar la reproducción de Qobuz."""
 
     search_requested = pyqtSignal(str, str)
+    local_requested = pyqtSignal()
     preview_requested = pyqtSignal(object)
     apply_requested = pyqtSignal(object)
     save_requested = pyqtSignal(object)
@@ -227,6 +228,12 @@ class LyricsManagerDialog(QDialog):
         form.addWidget(self.new_button, 0, 5)
         layout.addWidget(form_host)
 
+        self.local_button = QPushButton("Ver letras guardadas")
+        self.local_button.setAccessibleDescription(
+            "Muestra todas las letras guardadas en la biblioteca y la caché offline."
+        )
+        layout.addWidget(self.local_button)
+
         self.search_status_label = QLabel(
             "Escribe artista y título para buscar en tu biblioteca y proveedores."
         )
@@ -297,6 +304,7 @@ class LyricsManagerDialog(QDialog):
         self.tabs.addTab(tab, "Buscar")
 
         self.search_button.clicked.connect(self._request_search)
+        self.local_button.clicked.connect(self._request_local)
         self.search_artist_edit.returnPressed.connect(self._request_search)
         self.search_title_edit.returnPressed.connect(self._request_search)
         self.new_button.clicked.connect(self.start_new_entry)
@@ -509,6 +517,11 @@ class LyricsManagerDialog(QDialog):
             return
         self.set_searching()
         self.search_requested.emit(artist, title)
+
+    def _request_local(self) -> None:
+        self.set_searching()
+        self.search_status_label.setText("Cargando letras guardadas…")
+        self.local_requested.emit()
 
     def set_searching(self) -> None:
         self.search_button.setEnabled(False)

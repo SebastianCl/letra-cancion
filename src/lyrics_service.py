@@ -180,10 +180,16 @@ class LyricsCache:
             lyrics_data: Datos de letras a guardar
         """
         try:
+            # Las respuestas de algunos proveedores pueden no incluir todos
+            # los metadatos. Completar artista y título garantiza que la
+            # entrada pueda validarse y recuperarse posteriormente offline.
+            data_to_save = clone_lyrics_data(lyrics_data)
+            data_to_save.artist = data_to_save.artist or artist
+            data_to_save.title = data_to_save.title or title
             cache_path = self._get_cache_path(
-                artist, title, synced=lyrics_data.is_synced
+                artist, title, synced=data_to_save.is_synced
             )
-            lrc_content = LRCParser.to_lrc(lyrics_data)
+            lrc_content = LRCParser.to_lrc(data_to_save)
             atomic_write_text(cache_path, lrc_content)
             logger.debug(f"Guardado en caché: {artist} - {title}")
         except Exception as e:
@@ -203,6 +209,27 @@ class LyricsCache:
                         "Error eliminando caché %s: %s", path.name, exc
                     )
         return count
+
+    def all_lyrics(self) -> list[LyricsData]:
+        """Devuelve todas las letras descargadas que se puedan leer."""
+        result: list[LyricsData] = []
+        for directory, synced in (
+            (self.synced_dir, True),
+            (self.plain_dir, False),
+        ):
+            for path in directory.glob("*.lrc"):
+                try:
+                    data = LRCParser.parse(
+                        read_text_limited(path, max_bytes=1048576)
+                    )
+                    data.is_synced = synced
+                    if data.artist and data.title and data.lines:
+                        result.append(data)
+                except Exception as exc:
+                    logger.warning(
+                        "Error leyendo letra local %s: %s", path.name, exc
+                    )
+        return result
 
     def clear(self) -> int:
         """
@@ -723,6 +750,7 @@ class LyricsService:
 
         # 2. Buscar en caché
         cached = self.cache.get(artist, title)
+        cached_plain_fallback: Optional[LyricsData] = None
         if cached:
             if not _track_matches(
                 artist, title, cached.artist, cached.title
@@ -731,10 +759,14 @@ class LyricsService:
                     f"Ignorando letra en caché con metadatos incorrectos: "
                     f"{artist} - {title}"
                 )
-            elif not prefer_synced or cached.is_synced:
+            elif cached.is_synced or not prefer_synced:
                 return LyricsSearchResult(
                     lyrics_data=cached, provider="cache", cached=True
                 )
+            else:
+                # Conservar una letra plana como respaldo: puede ser la
+                # única versión disponible cuando la aplicación está offline.
+                cached_plain_fallback = cached
 
         # 3. Buscar en proveedores
         duration_seconds = duration_ms // 1000 if duration_ms else None
@@ -784,6 +816,16 @@ class LyricsService:
             )
             return LyricsSearchResult(
                 lyrics_data=result, provider=provider_name, cached=False
+            )
+
+        if cached_plain_fallback:
+            logger.info(
+                f"Usando letra plana guardada offline para: {artist} - {title}"
+            )
+            return LyricsSearchResult(
+                lyrics_data=cached_plain_fallback,
+                provider="cache",
+                cached=True,
             )
 
         logger.info(f"No se encontraron letras para: {artist} - {title}")
@@ -858,6 +900,40 @@ class LyricsService:
             if len(deduplicated) >= limit:
                 break
         return deduplicated
+
+    def list_local_candidates(self, limit: int = 200) -> list[LyricsCandidate]:
+        """Lista letras personales y descargadas para explorarlas offline."""
+        candidates: dict[tuple[str, str], LyricsCandidate] = {}
+
+        for entry in self.library.all_entries():
+            candidate = entry.to_candidate()
+            candidates[candidate.identity[:2]] = candidate
+
+        for lyrics in self.cache.all_lyrics():
+            candidate = LyricsCandidate(
+                provider="Caché offline",
+                provider_id=f"cache:{normalize_track_text(lyrics.artist or '')}|"
+                f"{normalize_track_text(lyrics.title or '')}",
+                artist=lyrics.artist or "",
+                title=lyrics.title or "",
+                album=lyrics.album or "",
+                is_synced=lyrics.is_synced,
+                lyrics_data=clone_lyrics_data(lyrics),
+            )
+            identity = candidate.identity[:2]
+            previous = candidates.get(identity)
+            # La biblioteca personal tiene prioridad; entre descargas,
+            # conservar la versión sincronizada.
+            if previous is None or (
+                previous.provider == "Caché offline"
+                and candidate.is_synced
+                and not previous.is_synced
+            ):
+                candidates[identity] = candidate
+
+        result = list(candidates.values())
+        result.sort(key=lambda item: (item.artist.casefold(), item.title.casefold()))
+        return result[: max(1, limit)]
 
     async def load_candidate(
         self, candidate: LyricsCandidate

@@ -227,6 +227,9 @@ class LetraCancionApp:
             self.lyrics_manager.search_requested.connect(
                 self._on_manager_search_requested
             )
+            self.lyrics_manager.local_requested.connect(
+                self._on_manager_local_requested
+            )
             self.lyrics_manager.preview_requested.connect(
                 self._on_manager_preview_requested
             )
@@ -499,6 +502,26 @@ class LetraCancionApp:
             return
         except Exception as exc:
             logger.error("Error en búsqueda manual de letras: %s", exc)
+            if self.lyrics_manager:
+                self.lyrics_manager.set_search_error(str(exc))
+
+    def _on_manager_local_requested(self) -> None:
+        self._replace_task(
+            "_manager_search_task",
+            self._load_manager_local_candidates(),
+        )
+
+    async def _load_manager_local_candidates(self) -> None:
+        try:
+            candidates = await asyncio.to_thread(
+                self.lyrics_service.list_local_candidates
+            )
+            if self.lyrics_manager:
+                self.lyrics_manager.set_search_results(candidates)
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:
+            logger.error("Error cargando letras locales: %s", exc)
             if self.lyrics_manager:
                 self.lyrics_manager.set_search_error(str(exc))
 

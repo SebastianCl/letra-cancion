@@ -1,9 +1,11 @@
+import asyncio
 import unittest
 from unittest.mock import sentinel
 
 from src.lyrics_service import (
     LRCLIBProvider,
     LyricsCache,
+    LyricsService,
     NetEaseProvider,
     _metadata_matches,
     _track_matches,
@@ -273,6 +275,44 @@ class LyricsCacheTests(unittest.TestCase):
         self.assertIsNotNone(restored)
         self.assertFalse(restored.is_synced)
 
+    def test_save_completes_missing_metadata_for_offline_validation(self):
+        from tempfile import TemporaryDirectory
+        from pathlib import Path
+
+        with TemporaryDirectory() as directory:
+            cache = LyricsCache(Path(directory))
+            lyrics = LRCParser.parse_plain_lyrics("First line", duration_ms=0)
+
+            cache.save("Artist", "Song", lyrics)
+            restored = cache.get("Artist", "Song")
+
+        self.assertIsNotNone(restored)
+        self.assertEqual(restored.artist, "Artist")
+        self.assertEqual(restored.title, "Song")
+
+    def test_service_uses_cached_plain_lyrics_when_providers_fail(self):
+        from tempfile import TemporaryDirectory
+        from pathlib import Path
+
+        class OfflineProvider:
+            async def search(self, **kwargs):
+                raise OSError("sin conexión")
+
+        with TemporaryDirectory() as directory:
+            service = LyricsService(Path(directory))
+            lyrics = LRCParser.parse_plain_lyrics(
+                "First line\nSecond line", duration_ms=20000
+            )
+            service.cache.save("Artist", "Song", lyrics)
+            service._providers = [("offline", OfflineProvider())]
+
+            result = asyncio.run(service.search("Artist", "Song"))
+
+        self.assertIsNotNone(result)
+        self.assertTrue(result.cached)
+        self.assertEqual(result.provider, "cache")
+        self.assertEqual(result.lyrics_data.lines[0].text, "First line")
+
     def test_metadata_cannot_escape_hashed_cache_directory(self):
         from tempfile import TemporaryDirectory
         from pathlib import Path
@@ -283,6 +323,22 @@ class LyricsCacheTests(unittest.TestCase):
 
         self.assertEqual(path.parent, cache.synced_dir)
         self.assertEqual(path.suffix, ".lrc")
+
+    def test_lists_downloaded_lyrics_for_offline_library(self):
+        from tempfile import TemporaryDirectory
+        from pathlib import Path
+
+        with TemporaryDirectory() as directory:
+            cache = LyricsCache(Path(directory))
+            lyrics = LRCParser.parse(
+                "[ti:Song]\n[ar:Artist]\n[00:01.00]First line"
+            )
+            cache.save("Artist", "Song", lyrics)
+
+            entries = cache.all_lyrics()
+
+        self.assertEqual(len(entries), 1)
+        self.assertEqual((entries[0].artist, entries[0].title), ("Artist", "Song"))
 
 
 if __name__ == "__main__":

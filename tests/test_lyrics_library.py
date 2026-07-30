@@ -173,3 +173,33 @@ def test_automatic_search_prioritizes_local_library(tmp_path):
     assert result.provider == "Biblioteca local"
     assert result.local is True
     assert result.lyrics_data.lines[0].text == "Remember those walls I built"
+
+
+def test_service_lists_personal_and_downloaded_lyrics(tmp_path):
+    service = LyricsService(tmp_path)
+    entry = make_entry()
+    service.save_user_lyrics(
+        artist=entry.artist,
+        title=entry.title,
+        album=entry.album,
+        duration_ms=entry.duration_ms,
+        lyrics_data=entry.lyrics_data,
+    )
+    service.cache.save(
+        "Radiohead",
+        "Creep",
+        LyricsData(
+            lines=[LyricLine(1000, "Where were you?")],
+            artist="Radiohead",
+            title="Creep",
+            is_synced=True,
+        ),
+    )
+
+    candidates = service.list_local_candidates()
+
+    assert {(candidate.artist, candidate.title) for candidate in candidates} == {
+        ("Beyoncé", "Halo"),
+        ("Radiohead", "Creep"),
+    }
+    assert all(candidate.lyrics_data is not None for candidate in candidates)
