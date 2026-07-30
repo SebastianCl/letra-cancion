@@ -853,7 +853,7 @@ class LetraCancionApp:
                 "• Ctrl+T: activar/desactivar traducción\n"
                 "• Arrastra la barra superior para mover la ventana\n"
                 "• Click derecho: ajustar sincronización\n"
-                "• Cerrar oculta la ventana en la bandeja\n"
+                "• Cerrar termina la aplicación\n"
                 "• Menú del tray: Configuración y Ayuda",
                 duration_ms=10000,
             )
