@@ -219,6 +219,9 @@ class LetraCancionApp:
             self.overlay.manage_lyrics_requested.connect(
                 self._open_lyrics_manager
             )
+            self.overlay.translation_toggle_requested.connect(
+                self._toggle_translation
+            )
             self.overlay.quit_requested.connect(self._quit)
             self.overlay.closed.connect(self._on_overlay_closed)
             self.tray.set_always_on_top(s.always_on_top)
