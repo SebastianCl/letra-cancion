@@ -47,6 +47,13 @@ pip install -r requirements.txt
 python -m src.main
 ```
 
+Para instalar las dependencias de desarrollo y ejecutar las pruebas:
+
+```powershell
+pip install -r requirements-dev.txt
+python -m pytest
+```
+
 ## 📦 Ejecutable distribuible
 
 Para generar una versión empaquetada con PyInstaller, ejecuta:
@@ -124,8 +131,12 @@ letra-cancion/
 │       ├── tray.py          # Icono en bandeja
 │       └── settings.py      # Diálogos de config y ayuda
 ├── assets/
+├── app.spec                    # Configuración de PyInstaller
+├── launcher.py                 # Entrada del ejecutable empaquetado
 ├── requirements.txt
 ├── requirements-dev.txt
+├── build.ps1
+├── run-letra-cancion.ps1
 └── README.md
 ```
 
@@ -209,7 +220,7 @@ Comprobación rápida de sintaxis e importaciones:
 python -m compileall src launcher.py
 ```
 
-Ejecuta la suite automatizada con:
+Instala primero las dependencias de desarrollo y ejecuta la suite automatizada con:
 
 ```powershell
 python -m pytest
