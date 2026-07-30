@@ -136,3 +136,11 @@ def test_qobuz_state_ignores_timestamp_outside_datetime_range(tmp_path):
     detector._update_position_from_qobuz_state()
 
     assert detector._last_qobuz_timestamp_ms is None
+
+
+def test_missing_appdata_does_not_fall_back_to_relative_qobuz_path(monkeypatch):
+    monkeypatch.delenv("APPDATA", raising=False)
+    with patch("src.window_detector.ctypes.windll"):
+        detector = WindowTitleDetector()
+
+    assert detector._qobuz_state_path.is_absolute()

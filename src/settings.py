@@ -11,6 +11,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Optional
 
+from .storage import atomic_write_text, read_text_limited
+
 logger = logging.getLogger(__name__)
 
 # Ruta por defecto del archivo de configuración
@@ -93,7 +95,7 @@ class SettingsManager:
             return
 
         try:
-            data = json.loads(self._path.read_text(encoding="utf-8"))
+            data = json.loads(read_text_limited(self._path, max_bytes=262144))
             if not isinstance(data, dict):
                 raise ValueError("La configuración debe ser un objeto JSON")
             try:
@@ -161,11 +163,10 @@ class SettingsManager:
         """Guarda la configuración actual en disco."""
         try:
             self._settings.validate()
-            self._path.parent.mkdir(parents=True, exist_ok=True)
             data = asdict(self._settings)
-            self._path.write_text(
+            atomic_write_text(
+                self._path,
                 json.dumps(data, ensure_ascii=False, indent=2),
-                encoding="utf-8",
             )
             logger.debug(f"Configuración guardada en {self._path}")
         except Exception as e:

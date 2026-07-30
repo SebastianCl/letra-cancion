@@ -1,3 +1,5 @@
+import pytest
+
 from src.lrc_parser import LRCParser
 
 
@@ -13,3 +15,8 @@ def test_timestamp_rejects_seconds_outside_valid_range():
     )
 
     assert [line.text for line in lyrics.lines] == ["Valid timestamp"]
+
+
+def test_parser_rejects_excessively_large_untrusted_content():
+    with pytest.raises(ValueError, match="demasiado grande"):
+        LRCParser.parse("x" * (LRCParser.MAX_CONTENT_CHARS + 1))

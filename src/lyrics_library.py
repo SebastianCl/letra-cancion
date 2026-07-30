@@ -14,10 +14,15 @@ from pathlib import Path
 from typing import Optional
 
 from .lrc_parser import LyricLine, LyricsData
+from .storage import atomic_write_text, read_text_limited
 
 logger = logging.getLogger(__name__)
 
 LIBRARY_SCHEMA_VERSION = 1
+MAX_LIBRARY_FILE_BYTES = 1048576
+MAX_LIBRARY_LINES = 5000
+MAX_METADATA_CHARS = 512
+MAX_LYRIC_LINE_CHARS = 4096
 
 
 def normalize_track_text(value: Optional[str]) -> str:
@@ -183,13 +188,35 @@ class UserLyricsLibrary:
 
     @staticmethod
     def _deserialize(payload: dict) -> UserLyricsEntry:
+        if not isinstance(payload, dict):
+            raise ValueError("La entrada local debe ser un objeto JSON")
         if payload.get("schema_version") != LIBRARY_SCHEMA_VERSION:
             raise ValueError("Versión de biblioteca no compatible")
 
-        artist = str(payload.get("artist", "")).strip()
-        title = str(payload.get("title", "")).strip()
+        artist = payload.get("artist", "")
+        title = payload.get("title", "")
+        if not isinstance(artist, str) or not isinstance(title, str):
+            raise ValueError("Los metadatos de la entrada no son texto")
+        artist = artist.strip()
+        title = title.strip()
         if not artist or not title:
             raise ValueError("La entrada no contiene artista y título")
+        if len(artist) > MAX_METADATA_CHARS or len(title) > MAX_METADATA_CHARS:
+            raise ValueError("Los metadatos de la entrada son demasiado largos")
+        album = payload.get("album", "")
+        source = payload.get("source", "manual")
+        updated_at = payload.get("updated_at", "")
+        if not all(isinstance(value, str) for value in (album, source, updated_at)):
+            raise ValueError("Los metadatos de la entrada no son texto")
+        album = album.strip()
+        source = source.strip() or "manual"
+        updated_at = updated_at.strip() or datetime.now(timezone.utc).isoformat()
+        if (
+            len(album) > MAX_METADATA_CHARS
+            or len(source) > MAX_METADATA_CHARS
+            or len(updated_at) > MAX_METADATA_CHARS
+        ):
+            raise ValueError("Los metadatos de la entrada son demasiado largos")
 
         lyrics_payload = payload.get("lyrics")
         if not isinstance(lyrics_payload, dict):
@@ -198,33 +225,55 @@ class UserLyricsLibrary:
         raw_lines = lyrics_payload.get("lines")
         if not isinstance(raw_lines, list):
             raise ValueError("La lista de líneas no es válida")
+        if len(raw_lines) > MAX_LIBRARY_LINES:
+            raise ValueError("La entrada contiene demasiadas líneas")
 
         lines: list[LyricLine] = []
         for raw_line in raw_lines:
             if not isinstance(raw_line, dict):
                 raise ValueError("Una línea de letra no es válida")
-            timestamp_ms = int(raw_line.get("timestamp_ms", 0))
-            text = str(raw_line.get("text", "")).strip()
+            timestamp_ms = raw_line.get("timestamp_ms", 0)
+            text = raw_line.get("text", "")
+            if (
+                not isinstance(timestamp_ms, int)
+                or isinstance(timestamp_ms, bool)
+                or not isinstance(text, str)
+            ):
+                raise ValueError("Una línea contiene tipos inválidos")
+            text = text.strip()
             if timestamp_ms < 0 or not text:
                 raise ValueError("Una línea contiene tiempo o texto inválido")
+            if len(text) > MAX_LYRIC_LINE_CHARS:
+                raise ValueError("Una línea de letra es demasiado larga")
             lines.append(LyricLine(timestamp_ms=timestamp_ms, text=text))
+
+        offset_ms = lyrics_payload.get("offset_ms", 0)
+        is_synced = lyrics_payload.get("is_synced", False)
+        duration_ms = payload.get("duration_ms", 0)
+        if (
+            not isinstance(offset_ms, int)
+            or isinstance(offset_ms, bool)
+            or not isinstance(is_synced, bool)
+            or not isinstance(duration_ms, int)
+            or isinstance(duration_ms, bool)
+        ):
+            raise ValueError("La entrada contiene valores numéricos inválidos")
 
         lyrics_data = LyricsData(
             lines=lines,
             title=title,
             artist=artist,
-            album=str(payload.get("album", "")).strip() or None,
-            offset_ms=int(lyrics_payload.get("offset_ms", 0)),
-            is_synced=bool(lyrics_payload.get("is_synced", False)),
+            album=album or None,
+            offset_ms=offset_ms,
+            is_synced=is_synced,
         )
         return UserLyricsEntry(
             artist=artist,
             title=title,
-            album=str(payload.get("album", "")).strip(),
-            duration_ms=max(0, int(payload.get("duration_ms", 0))),
-            source=str(payload.get("source", "manual")).strip() or "manual",
-            updated_at=str(payload.get("updated_at", "")).strip()
-            or datetime.now(timezone.utc).isoformat(),
+            album=album,
+            duration_ms=max(0, duration_ms),
+            source=source,
+            updated_at=updated_at,
             lyrics_data=lyrics_data,
         )
 
@@ -241,7 +290,9 @@ class UserLyricsLibrary:
                     return entry
             return None
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload = json.loads(
+                read_text_limited(path, max_bytes=MAX_LIBRARY_FILE_BYTES)
+            )
             entry = self._deserialize(payload)
             if entry.key != make_track_key(artist, title):
                 logger.warning(
@@ -257,6 +308,11 @@ class UserLyricsLibrary:
 
     def save(self, entry: UserLyricsEntry) -> UserLyricsEntry:
         """Guarda una entrada mediante reemplazo atómico."""
+        if not all(
+            isinstance(value, str)
+            for value in (entry.artist, entry.title, entry.album, entry.source)
+        ):
+            raise ValueError("Los metadatos de la letra deben ser texto")
         entry.artist = entry.artist.strip()
         entry.title = entry.title.strip()
         entry.album = entry.album.strip()
@@ -267,25 +323,25 @@ class UserLyricsLibrary:
 
         if not entry.artist or not entry.title:
             raise ValueError("El artista y el título son obligatorios")
+        if any(
+            len(value) > MAX_METADATA_CHARS
+            for value in (entry.artist, entry.title, entry.album, entry.source)
+        ):
+            raise ValueError("Los metadatos de la letra son demasiado largos")
         if not entry.lyrics_data.lines:
             raise ValueError("La letra debe contener al menos una línea")
+        if len(entry.lyrics_data.lines) > MAX_LIBRARY_LINES:
+            raise ValueError("La letra contiene demasiadas líneas")
+        if any(
+            not isinstance(line.text, str)
+            or len(line.text.strip()) > MAX_LYRIC_LINE_CHARS
+            for line in entry.lyrics_data.lines
+        ):
+            raise ValueError("La letra contiene una línea demasiado larga")
 
         path = self._path_for(entry.artist, entry.title)
-        temporary_path = path.with_suffix(".json.tmp")
         payload = self._serialize(entry)
-        try:
-            temporary_path.write_text(
-                json.dumps(payload, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-            temporary_path.replace(path)
-        except Exception:
-            if temporary_path.exists():
-                try:
-                    temporary_path.unlink()
-                except OSError:
-                    pass
-            raise
+        atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2))
         return entry
 
     def exists(self, artist: str, title: str) -> bool:
@@ -303,7 +359,9 @@ class UserLyricsLibrary:
         entries: list[UserLyricsEntry] = []
         for path in self.library_dir.glob("*.json"):
             try:
-                payload = json.loads(path.read_text(encoding="utf-8"))
+                payload = json.loads(
+                    read_text_limited(path, max_bytes=MAX_LIBRARY_FILE_BYTES)
+                )
                 entries.append(self._deserialize(payload))
             except Exception as exc:
                 logger.warning(

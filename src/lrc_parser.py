@@ -114,6 +114,8 @@ class LyricsData:
 class LRCParser:
     """Parser para archivos/strings en formato LRC."""
 
+    MAX_CONTENT_CHARS = 524288
+
     # Regex para líneas con timestamp: [mm:ss.xx] o [mm:ss:xx] o [mm:ss]
     TIMESTAMP_PATTERN = re.compile(r"\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\]")
 
@@ -131,6 +133,11 @@ class LRCParser:
         Returns:
             LyricsData con las líneas parseadas
         """
+        if not isinstance(lrc_content, str):
+            raise ValueError("El contenido LRC debe ser texto")
+        if len(lrc_content) > cls.MAX_CONTENT_CHARS:
+            raise ValueError("El contenido LRC es demasiado grande")
+
         lines: list[LyricLine] = []
         title = None
         artist = None
@@ -220,6 +227,11 @@ class LRCParser:
         Returns:
             LyricsData con timestamps distribuidos uniformemente
         """
+        if not isinstance(plain_text, str):
+            raise ValueError("El contenido de la letra debe ser texto")
+        if len(plain_text) > cls.MAX_CONTENT_CHARS:
+            raise ValueError("El contenido de la letra es demasiado grande")
+
         lines_text = [
             line.strip() for line in plain_text.strip().split("\n") if line.strip()
         ]

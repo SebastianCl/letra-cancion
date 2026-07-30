@@ -18,6 +18,7 @@ from typing import Callable, Optional
 from deep_translator import GoogleTranslator
 
 from .lrc_parser import LyricsData, LyricLine
+from .storage import atomic_write_text, read_text_limited
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,8 @@ class TranslationCache:
 
     def _get_cache_path(self, artist: str, title: str, target_lang: str) -> Path:
         """Obtiene la ruta del archivo de caché."""
+        if target_lang not in {"en", "es"}:
+            raise ValueError("Idioma destino no permitido para caché")
         key = self._get_cache_key(artist, title)
         return self.cache_dir / f"{key}_{target_lang}.json"
 
@@ -61,7 +64,7 @@ class TranslationCache:
 
         if cache_path.exists():
             try:
-                content = cache_path.read_text(encoding="utf-8")
+                content = read_text_limited(cache_path, max_bytes=1048576)
                 data = json.loads(content)
                 if not isinstance(data, dict):
                     return None
@@ -110,7 +113,8 @@ class TranslationCache:
                 "target_lang": target_lang,
                 "translations": {str(k): v for k, v in translations.items()},
             }
-            cache_path.write_text(
+            atomic_write_text(
+                cache_path,
                 json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
             )
             logger.debug(f"Traducción guardada en caché: {artist} - {title}")

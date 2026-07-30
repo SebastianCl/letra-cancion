@@ -44,6 +44,22 @@ class FakeSession:
         return self.post_response
 
 
+class FakeContent:
+    def __init__(self, chunks):
+        self.chunks = chunks
+
+    async def iter_chunked(self, size):
+        for chunk in self.chunks:
+            yield chunk
+
+
+class StreamingResponse(FakeResponse):
+    def __init__(self, chunks):
+        super().__init__(payload=None)
+        self.headers = {}
+        self.content = FakeContent(chunks)
+
+
 class LyricsProviderTests(unittest.IsolatedAsyncioTestCase):
     async def test_lrclib_uses_explicit_verified_ssl_context(self):
         response = FakeResponse(
@@ -200,6 +216,29 @@ class LyricsProviderTests(unittest.IsolatedAsyncioTestCase):
             await netease.search_candidates("Radiohead", "Creep"), []
         )
 
+    async def test_provider_rejects_response_with_excessive_declared_size(self):
+        response = FakeResponse([])
+        response.headers = {"Content-Length": str(2 * 1024 * 1024 + 1)}
+        provider = LRCLIBProvider(
+            FakeSession(get_response=response), ssl_context=sentinel.ssl_context
+        )
+
+        candidates = await provider.search_candidates("Radiohead", "Creep")
+
+        self.assertEqual(candidates, [])
+        self.assertEqual(response.json_calls, [])
+
+    async def test_provider_stops_streaming_response_over_size_limit(self):
+        response = StreamingResponse([b"[" + b" " * (2 * 1024 * 1024)])
+        provider = LRCLIBProvider(
+            FakeSession(get_response=response), ssl_context=sentinel.ssl_context
+        )
+
+        candidates = await provider.search_candidates("Radiohead", "Creep")
+
+        self.assertEqual(candidates, [])
+        self.assertEqual(response.json_calls, [])
+
 
 class MetadataMatchingTests(unittest.TestCase):
     def test_track_matches_normalized_metadata(self):
@@ -233,6 +272,17 @@ class LyricsCacheTests(unittest.TestCase):
 
         self.assertIsNotNone(restored)
         self.assertFalse(restored.is_synced)
+
+    def test_metadata_cannot_escape_hashed_cache_directory(self):
+        from tempfile import TemporaryDirectory
+        from pathlib import Path
+
+        with TemporaryDirectory() as directory:
+            cache = LyricsCache(Path(directory))
+            path = cache._get_cache_path("..\\outside", r"C:\escape", True)
+
+        self.assertEqual(path.parent, cache.synced_dir)
+        self.assertEqual(path.suffix, ".lrc")
 
 
 if __name__ == "__main__":

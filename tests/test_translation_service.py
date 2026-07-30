@@ -49,3 +49,10 @@ def test_translation_cache_rejects_malformed_translation_values(tmp_path):
     )
 
     assert cache.get("Artist", "Song", "es") is None
+
+
+def test_translation_cache_rejects_unsafe_target_language_filename(tmp_path):
+    cache = TranslationCache(tmp_path)
+
+    with __import__("pytest").raises(ValueError, match="Idioma destino"):
+        cache._get_cache_path("Artist", "Song", "..\\outside")

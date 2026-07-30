@@ -40,6 +40,7 @@ from ..lyrics_library import (
     clone_lyrics_data,
     track_metadata_matches,
 )
+from ..storage import read_text_limited
 from ..models import TrackInfo
 
 _TIME_PATTERN = re.compile(r"^(\d+):([0-5]\d)(?:\.(\d{1,3}))?$")
@@ -657,12 +658,16 @@ class LyricsManagerDialog(QDialog):
         if not content:
             QMessageBox.warning(self, "Letra vacía", "Pega una letra primero.")
             return
-        if LRCParser.TIMESTAMP_PATTERN.search(content):
-            lyrics = LRCParser.parse(content)
-        else:
-            lyrics = LRCParser.parse_plain_lyrics(
-                content, self.editor_duration_spin.value() * 1000
-            )
+        try:
+            if LRCParser.TIMESTAMP_PATTERN.search(content):
+                lyrics = LRCParser.parse(content)
+            else:
+                lyrics = LRCParser.parse_plain_lyrics(
+                    content, self.editor_duration_spin.value() * 1000
+                )
+        except ValueError as exc:
+            QMessageBox.warning(self, "Formato no válido", str(exc))
+            return
         if not lyrics.lines:
             QMessageBox.warning(
                 self, "Formato no válido", "No se encontraron líneas de letra."
@@ -690,10 +695,17 @@ class LyricsManagerDialog(QDialog):
         if not filename:
             return
         try:
-            content = Path(filename).read_text(encoding="utf-8-sig")
+            content = read_text_limited(
+                Path(filename),
+                max_bytes=LRCParser.MAX_CONTENT_CHARS,
+                encoding="utf-8-sig",
+            )
         except Exception as exc:
+            logger.warning("No se pudo importar un archivo LRC: %s", exc)
             QMessageBox.critical(
-                self, "No se pudo importar", f"Error leyendo el archivo:\n{exc}"
+                self,
+                "No se pudo importar",
+                "El archivo debe ser texto UTF-8 y no superar 512 KiB.",
             )
             return
         self.raw_lyrics_edit.setPlainText(content)

@@ -10,6 +10,7 @@ Incluye caché local para evitar consultas repetidas.
 
 import asyncio
 import hashlib
+import json
 import logging
 import ssl
 from dataclasses import dataclass
@@ -30,8 +31,39 @@ from .lyrics_library import (
     normalize_track_text,
     track_metadata_matches,
 )
+from .storage import atomic_write_text, read_text_limited
 
 logger = logging.getLogger(__name__)
+
+MAX_HTTP_RESPONSE_BYTES = 2 * 1024 * 1024
+
+
+async def _read_json_response(response, allow_any_content: bool = False):
+    """Lee JSON HTTP con límite estricto para respuestas no confiables."""
+    headers = getattr(response, "headers", {}) or {}
+    content_length = headers.get("Content-Length")
+    if content_length:
+        try:
+            declared_size = int(content_length)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("La respuesta HTTP declara un tamaño inválido") from exc
+        if declared_size < 0 or declared_size > MAX_HTTP_RESPONSE_BYTES:
+            raise ValueError("La respuesta HTTP es demasiado grande")
+
+    content = getattr(response, "content", None)
+    if content is None or not hasattr(content, "iter_chunked"):
+        if allow_any_content:
+            return await response.json(content_type=None)
+        return await response.json()
+
+    chunks: list[bytes] = []
+    total_size = 0
+    async for chunk in content.iter_chunked(65536):
+        total_size += len(chunk)
+        if total_size > MAX_HTTP_RESPONSE_BYTES:
+            raise ValueError("La respuesta HTTP es demasiado grande")
+        chunks.append(chunk)
+    return json.loads(b"".join(chunks).decode("utf-8-sig"))
 
 
 def _normalize_metadata(value: Optional[str]) -> str:
@@ -117,7 +149,7 @@ class LyricsCache:
         synced_path = self._get_cache_path(artist, title, synced=True)
         if synced_path.exists():
             try:
-                content = synced_path.read_text(encoding="utf-8")
+                content = read_text_limited(synced_path, max_bytes=1048576)
                 data = LRCParser.parse(content)
                 logger.debug(f"Cache hit (synced): {artist} - {title}")
                 return data
@@ -128,7 +160,7 @@ class LyricsCache:
         plain_path = self._get_cache_path(artist, title, synced=False)
         if plain_path.exists():
             try:
-                content = plain_path.read_text(encoding="utf-8")
+                content = read_text_limited(plain_path, max_bytes=1048576)
                 data = LRCParser.parse(content)
                 data.is_synced = False
                 logger.debug(f"Cache hit (plain): {artist} - {title}")
@@ -152,7 +184,7 @@ class LyricsCache:
                 artist, title, synced=lyrics_data.is_synced
             )
             lrc_content = LRCParser.to_lrc(lyrics_data)
-            cache_path.write_text(lrc_content, encoding="utf-8")
+            atomic_write_text(cache_path, lrc_content)
             logger.debug(f"Guardado en caché: {artist} - {title}")
         except Exception as e:
             logger.warning(f"Error guardando en caché: {e}")
@@ -248,7 +280,7 @@ class LRCLIBProvider:
                 ssl=self.ssl_context,
             ) as response:
                 if response.status == 200:
-                    data = await response.json()
+                    data = await _read_json_response(response)
                     if _track_matches(
                         artist,
                         title,
@@ -274,7 +306,7 @@ class LRCLIBProvider:
                 ssl=self.ssl_context,
             ) as response:
                 if response.status == 200:
-                    results = await response.json()
+                    results = await _read_json_response(response)
                     for result in results or []:
                         if _track_matches(
                             artist,
@@ -301,7 +333,7 @@ class LRCLIBProvider:
             ) as response:
                 if response.status != 200:
                     return []
-                results = await response.json()
+                results = await _read_json_response(response)
         except Exception as exc:
             logger.warning("LRCLIB candidate search exception: %s", exc)
             return []
@@ -355,7 +387,11 @@ class LRCLIBProvider:
 
         if synced_lyrics:
             # Preferir letras sincronizadas
-            lyrics_data = LRCParser.parse(synced_lyrics)
+            try:
+                lyrics_data = LRCParser.parse(synced_lyrics)
+            except (TypeError, ValueError) as exc:
+                logger.warning("LRCLIB devolvió una letra sincronizada inválida: %s", exc)
+                return None
             lyrics_data.title = data.get("trackName")
             lyrics_data.artist = data.get("artistName")
             lyrics_data.album = data.get("albumName")
@@ -366,7 +402,13 @@ class LRCLIBProvider:
                 duration_ms = int(float(data.get("duration") or 0) * 1000)
             except (TypeError, ValueError, OverflowError):
                 duration_ms = 0
-            lyrics_data = LRCParser.parse_plain_lyrics(plain_lyrics, duration_ms)
+            try:
+                lyrics_data = LRCParser.parse_plain_lyrics(
+                    plain_lyrics, duration_ms
+                )
+            except (TypeError, ValueError) as exc:
+                logger.warning("LRCLIB devolvió una letra plana inválida: %s", exc)
+                return None
             lyrics_data.title = data.get("trackName")
             lyrics_data.artist = data.get("artistName")
             lyrics_data.album = data.get("albumName")
@@ -442,7 +484,7 @@ class NetEaseProvider:
             ) as response:
                 if response.status != 200:
                     return []
-                result = await response.json(content_type=None)
+                result = await _read_json_response(response, allow_any_content=True)
         except Exception as exc:
             logger.warning("NetEase candidate search error: %s", exc)
             return []
@@ -522,7 +564,7 @@ class NetEaseProvider:
                 if response.status != 200:
                     return None
 
-                result = await response.json(content_type=None)
+                result = await _read_json_response(response, allow_any_content=True)
                 songs = result.get("result", {}).get("songs", [])
 
                 if not songs:
@@ -577,7 +619,7 @@ class NetEaseProvider:
                 if response.status != 200:
                     return None
 
-                result = await response.json(content_type=None)
+                result = await _read_json_response(response, allow_any_content=True)
 
                 # Intentar obtener letras sincronizadas
                 lrc_data = result.get("lrc", {})

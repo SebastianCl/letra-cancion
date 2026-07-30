@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 from .models import TrackInfo, PlaybackInfo, PlayerState
+from .storage import read_text_limited
 
 
 # Type aliases para callbacks
@@ -92,9 +93,13 @@ class WindowTitleDetector:
         # Para estimar posición (sin SMTC no tenemos posición real)
         self._playback_start_time: Optional[datetime] = None
         self._paused_position_ms: int = 0  # Posición al pausar
-        self._qobuz_state_path = qobuz_state_path or (
-            Path(os.environ.get("APPDATA", "")) / "Qobuz" / "player-0.json"
-        )
+        app_data = os.environ.get("APPDATA")
+        default_qobuz_state_path = (
+            Path(app_data)
+            if app_data
+            else Path.home() / "AppData" / "Roaming"
+        ) / "Qobuz" / "player-0.json"
+        self._qobuz_state_path = qobuz_state_path or default_qobuz_state_path
         self._last_qobuz_timestamp_ms: Optional[int] = None
 
         # Windows API
@@ -288,7 +293,7 @@ class WindowTitleDetector:
         """Lee el punto de posición persistido por Qobuz Desktop."""
         try:
             payload = json.loads(
-                self._qobuz_state_path.read_text(encoding="utf-8")
+                read_text_limited(self._qobuz_state_path, max_bytes=262144)
             )
             position = payload["player"]["data"]["position"]
             value_ms = int(position["value"])

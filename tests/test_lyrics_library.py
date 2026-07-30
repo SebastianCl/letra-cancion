@@ -70,6 +70,38 @@ def test_library_ignores_corrupt_or_unknown_entries(tmp_path):
     assert library.all_entries() == []
 
 
+def test_library_rejects_non_canonical_types_in_untrusted_json(tmp_path):
+    library = UserLyricsLibrary(tmp_path)
+    path = library._path_for("Artist", "Song")
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "artist": "Artist",
+                "title": "Song",
+                "duration_ms": "123000",
+                "lyrics": {
+                    "is_synced": "yes",
+                    "offset_ms": "0",
+                    "lines": [{"timestamp_ms": "1000", "text": "Line"}],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert library.get("Artist", "Song") is None
+
+
+def test_library_metadata_cannot_escape_hashed_storage_path(tmp_path):
+    library = UserLyricsLibrary(tmp_path)
+
+    path = library._path_for("..\\outside", r"C:\escape")
+
+    assert path.parent == tmp_path
+    assert path.suffix == ".json"
+
+
 def test_library_finds_small_metadata_variants(tmp_path):
     library = UserLyricsLibrary(tmp_path / "library")
     library.save(make_entry())
