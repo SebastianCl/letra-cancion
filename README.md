@@ -2,20 +2,25 @@
 
 Sistema de letras sincronizadas para **Qobuz** en Windows.
 
-Detecta automáticamente la canción que estás reproduciendo en Qobuz, busca la letra correspondiente y la muestra en una ventana inmersiva sincronizada con la música. Traduce automáticamente las letras entre inglés y español.
+Detecta automáticamente la canción que estás reproduciendo en Qobuz, busca la letra correspondiente y la muestra en una ventana inmersiva sincronizada con la música. Traduce automáticamente letras en inglés o italiano al español; al activarla manualmente, también traduce letras en español al inglés.
 
 ## ✨ Características
 
 - **Detección automática** de la canción via Windows Media Session (SMTC), con fallback por título de ventana
 - **Letras sincronizadas** desde LRCLIB y NetEase Music
-- **Traducción bidireccional** inglés↔español automática (con caché local)
+- **Traducción automática** inglés→español e italiano→español, con español→inglés al activarla manualmente (con caché local)
 - **Ventana inmersiva responsive** con traducciones apiladas y progreso de reproducción
 - **Modo “Siempre encima” opcional**, desactivado por defecto
 - **Hotkeys globales** para controlar desde cualquier aplicación
 - **Panel de configuración** para personalizar apariencia y comportamiento
 - **Ayuda integrada** con referencia rápida de atajos
 - **Fallback inteligente**: si no hay letra sincronizada, muestra scroll estimado
-- **Caché local** para evitar búsquedas repetidas
+- **Biblioteca local y funcionamiento offline**: las versiones personales se
+  guardan en `~/.lyrics-cache/library/` y se reutilizan aunque no haya conexión
+  a Internet; las letras y traducciones descargadas también tienen cachés
+  separados
+- **Gestor de letras** para buscar cualquier canción, previsualizar resultados y guardar versiones personales
+- **Editor LRC** con pegado, importación, tiempos manuales y captura en vivo desde Qobuz
 - **Persistencia** de posición, tamaño, estado maximizado y preferencias de ventana
 
 ## 🚀 Instalación y ejecución
@@ -45,6 +50,13 @@ pip install -r requirements.txt
 python -m src.main
 ```
 
+Para instalar las dependencias de desarrollo y ejecutar las pruebas:
+
+```powershell
+pip install -r requirements-dev.txt
+python -m pytest
+```
+
 ## 📦 Ejecutable distribuible
 
 Para generar una versión empaquetada con PyInstaller, ejecuta:
@@ -65,6 +77,26 @@ El ejecutable se crea en `dist\LetraCancion\LetraCancion.exe`.
 | `Ctrl+Alt+↓` | Adelantar letras (si van atrasadas) |
 | `Ctrl+Alt+R` | Resetear sincronización |
 | `Ctrl+Shift+Q` | Salir de la aplicación |
+| `F8` | Capturar el tiempo actual en el editor de letras |
+
+## 📝 Gestionar letras
+
+Abre **Gestionar letras** desde el botón `♫` de la ventana principal o desde
+el menú del icono de la bandeja.
+
+- Busca por artista y título en la biblioteca local, LRCLIB y NetEase.
+- Previsualiza una coincidencia antes de aplicarla, guardarla o editarla.
+- Elimina una versión local desde su previsualización, con confirmación.
+- Agrega una letra pegando texto plano, contenido LRC o importando un archivo
+  `.lrc`.
+- Edita el texto y los tiempos en formato `mm:ss.xx`.
+- Mientras el editor coincida con la canción actual, usa **F8** o
+  **Usar tiempo actual** para marcar la fila seleccionada y avanzar a la
+  siguiente.
+
+Las versiones personales tienen prioridad sobre las fuentes en línea y se
+guardan en `~/.lyrics-cache/library/`. No se eliminan al limpiar el caché de
+letras descargadas.
 
 ## 🖱️ Interacciones del mouse
 
@@ -88,7 +120,9 @@ letra-cancion/
 │   ├── detector.py          # Detección via SMTC
 │   ├── window_detector.py   # Detección por título (fallback)
 │   ├── lyrics_service.py    # Búsqueda de letras
-│   ├── translation_service.py # Traducción EN↔ES
+│   ├── lyrics_library.py    # Biblioteca local de letras personales
+│   ├── translation_service.py # Detección y traducción de letras
+│   ├── storage.py           # Lectura y escritura persistente segura
 │   ├── sync_engine.py       # Motor de sincronización
 │   ├── lrc_parser.py        # Parser formato LRC
 │   ├── hotkeys.py           # Hotkeys globales
@@ -96,12 +130,17 @@ letra-cancion/
 │   └── ui/
 │       ├── __init__.py
 │       ├── overlay.py       # Ventana inmersiva de letras
+│       ├── lyrics_manager.py # Búsqueda, previsualización y editor
 │       ├── brand.py         # Identidad vectorial compartida
 │       ├── tray.py          # Icono en bandeja
 │       └── settings.py      # Diálogos de config y ayuda
 ├── assets/
+├── app.spec                    # Configuración de PyInstaller
+├── launcher.py                 # Entrada del ejecutable empaquetado
 ├── requirements.txt
 ├── requirements-dev.txt
+├── build.ps1
+├── run-letra-cancion.ps1
 └── README.md
 ```
 
@@ -117,9 +156,11 @@ Opciones disponibles:
 - **Traducción automática** activar/desactivar
 - **Siempre encima** activar/desactivar
 
-La configuración se guarda automáticamente en `~/.lyrics-cache/settings.json`.
-
-Las letras traducidas y las respuestas reutilizables también se almacenan localmente en `~/.lyrics-cache/`; no deben confirmarse en Git.
+La configuración se guarda en `~/.lyrics-cache/settings.json`. Las versiones
+personales se almacenan en `~/.lyrics-cache/library/`, las letras descargadas
+en `~/.lyrics-cache/synced/` y `~/.lyrics-cache/plain/`, y las traducciones en
+`~/.lyrics-cache/translations/`. Estas rutas están fuera del repositorio y no
+deben confirmarse en Git.
 
 ### Ajuste de sincronización
 
@@ -138,6 +179,13 @@ El sistema usa fuentes abiertas y gratuitas:
 2. **NetEase Music** (fallback): Servicio de música chino con buena cobertura
 
 Si no se encuentra letra sincronizada, se muestra la letra plana con scroll automático estimado.
+
+### Traducción automática
+
+La aplicación detecta el idioma de la letra y activa por defecto la traducción
+para inglés e italiano hacia español. Para letras en español, la traducción
+hacia inglés se activa manualmente desde `Ctrl+T`, el menú de la bandeja o el
+botón de traducción de la ventana.
 
 ## ⚠️ Limitaciones
 
@@ -184,4 +232,10 @@ Comprobación rápida de sintaxis e importaciones:
 python -m compileall src launcher.py
 ```
 
-Actualmente no hay una suite automatizada configurada. Para cambios de lógica, añade pruebas específicas en `tests/` con `pytest`, simulando las APIs externas y los servicios de Windows.
+Instala primero las dependencias de desarrollo y ejecuta la suite automatizada con:
+
+```powershell
+python -m pytest
+```
+
+Las pruebas simulan las APIs externas y los servicios de Windows.

@@ -1,12 +1,16 @@
+import json
 import unittest
+from datetime import datetime
 from unittest.mock import patch
 
+from src.models import PlayerState, PlaybackInfo, TrackInfo
 from src.window_detector import WindowTitleDetector
 
 
 class WindowTitleDetectorTests(unittest.TestCase):
     def setUp(self):
-        self.detector = WindowTitleDetector()
+        with patch("src.window_detector.ctypes.windll"):
+            self.detector = WindowTitleDetector()
 
     def test_only_accepts_window_owned_by_qobuz(self):
         windows = [
@@ -58,5 +62,85 @@ class WindowTitleDetectorTests(unittest.TestCase):
         self.assertEqual(track.artist, "Artist")
 
 
-if __name__ == "__main__":
-    unittest.main()
+def _write_position(path, position_ms, timestamp_ms):
+    path.write_text(
+        json.dumps(
+            {
+                "player": {
+                    "data": {
+                        "position": {
+                            "value": position_ms,
+                            "timestamp": timestamp_ms,
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_qobuz_state_seek_updates_real_position_and_notifies(tmp_path):
+    state_path = tmp_path / "player-0.json"
+    timestamp_ms = int(datetime.now().timestamp() * 1000)
+    _write_position(state_path, 11000, timestamp_ms)
+
+    with patch("src.window_detector.ctypes.windll"):
+        detector = WindowTitleDetector(
+            poll_interval=0.1, qobuz_state_path=state_path
+        )
+    detector._current_track = TrackInfo(title="Song", artist="Artist")
+    detector._current_playback = PlaybackInfo(
+        state=PlayerState.PLAYING,
+        position_ms=21000,
+    )
+    detector._is_playing = True
+    detector._paused_position_ms = 21000
+    detector._playback_start_time = datetime.now()
+    seeks = []
+    detector.on_seeked(seeks.append)
+
+    detector._update_position_from_qobuz_state()
+
+    assert len(seeks) == 1
+    assert abs(seeks[0] - 11000) < 100
+    assert abs(detector.get_interpolated_position_ms() - 11000) < 100
+
+
+def test_qobuz_state_does_not_repeat_same_seek(tmp_path):
+    state_path = tmp_path / "player-0.json"
+    timestamp_ms = int(datetime.now().timestamp() * 1000)
+    _write_position(state_path, 45000, timestamp_ms)
+
+    with patch("src.window_detector.ctypes.windll"):
+        detector = WindowTitleDetector(qobuz_state_path=state_path)
+    detector._current_track = TrackInfo(title="Song", artist="Artist")
+    detector._is_playing = True
+    seeks = []
+    detector.on_seeked(seeks.append)
+
+    detector._update_position_from_qobuz_state()
+    detector._update_position_from_qobuz_state()
+
+    assert len(seeks) == 1
+    assert abs(seeks[0] - 45000) < 100
+
+
+def test_qobuz_state_ignores_timestamp_outside_datetime_range(tmp_path):
+    state_path = tmp_path / "player-0.json"
+    _write_position(state_path, 1000, 2**63 - 1)
+
+    with patch("src.window_detector.ctypes.windll"):
+        detector = WindowTitleDetector(qobuz_state_path=state_path)
+
+    detector._update_position_from_qobuz_state()
+
+    assert detector._last_qobuz_timestamp_ms is None
+
+
+def test_missing_appdata_does_not_fall_back_to_relative_qobuz_path(monkeypatch):
+    monkeypatch.delenv("APPDATA", raising=False)
+    with patch("src.window_detector.ctypes.windll"):
+        detector = WindowTitleDetector()
+
+    assert detector._qobuz_state_path.is_absolute()

@@ -11,6 +11,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Optional
 
+from .storage import atomic_write_text, read_text_limited
+
 logger = logging.getLogger(__name__)
 
 # Ruta por defecto del archivo de configuración
@@ -34,7 +36,7 @@ class AppSettings:
     bg_color: str = "#080b1d"
     text_color: str = "#ffffff"
     highlight_color: str = "#ffffff"
-    dim_color: str = "#3f4762"
+    dim_color: str = "#aeb5cf"
     translation_color: str = "#8b5cf6"
 
     # --- Tamaño y posición de la ventana ---
@@ -58,6 +60,8 @@ class AppSettings:
     def validate(self) -> None:
         """Valida y corrige valores fuera de rango."""
         self.design_version = CURRENT_DESIGN_VERSION
+        if self.dim_color.lower() == "#3f4762":
+            self.dim_color = "#aeb5cf"
         self.opacity = max(0.65, min(1.0, self.opacity))
         self.font_size = max(16, min(32, self.font_size))
         self.highlight_font_size = max(32, min(64, self.highlight_font_size))
@@ -93,13 +97,41 @@ class SettingsManager:
             return
 
         try:
-            data = json.loads(self._path.read_text(encoding="utf-8"))
-            if int(data.get("design_version", 1)) < CURRENT_DESIGN_VERSION:
+            data = json.loads(read_text_limited(self._path, max_bytes=262144))
+            if not isinstance(data, dict):
+                raise ValueError("La configuración debe ser un objeto JSON")
+            try:
+                design_version = int(data.get("design_version", 1))
+            except (TypeError, ValueError):
+                design_version = 1
+            if design_version < CURRENT_DESIGN_VERSION:
                 data = self._migrate_legacy_settings(data)
             # Aplicar solo los campos conocidos
+            defaults = AppSettings()
             for key, value in data.items():
-                if hasattr(self._settings, key):
+                if not hasattr(defaults, key):
+                    continue
+                default_value = getattr(defaults, key)
+                if isinstance(default_value, bool):
+                    valid = isinstance(value, bool)
+                elif isinstance(default_value, int):
+                    valid = isinstance(value, int) and not isinstance(value, bool)
+                elif isinstance(default_value, float):
+                    valid = (
+                        isinstance(value, (int, float))
+                        and not isinstance(value, bool)
+                    )
+                    if valid:
+                        value = float(value)
+                else:
+                    valid = isinstance(value, type(default_value))
+                if valid:
                     setattr(self._settings, key, value)
+                else:
+                    logger.warning(
+                        "Valor inválido para %s; se conserva el valor por defecto",
+                        key,
+                    )
             self._settings.validate()
             logger.info(f"Configuración cargada desde {self._path}")
         except Exception as e:
@@ -133,11 +165,10 @@ class SettingsManager:
         """Guarda la configuración actual en disco."""
         try:
             self._settings.validate()
-            self._path.parent.mkdir(parents=True, exist_ok=True)
             data = asdict(self._settings)
-            self._path.write_text(
+            atomic_write_text(
+                self._path,
                 json.dumps(data, ensure_ascii=False, indent=2),
-                encoding="utf-8",
             )
             logger.debug(f"Configuración guardada en {self._path}")
         except Exception as e:

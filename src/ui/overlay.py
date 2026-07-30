@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import math
+import sys
 from dataclasses import dataclass
 from typing import Optional
 
@@ -24,6 +25,7 @@ from PyQt6.QtGui import (
     QColor,
     QCloseEvent,
     QFont,
+    QKeyEvent,
     QLinearGradient,
     QMouseEvent,
     QPainter,
@@ -38,6 +40,7 @@ from PyQt6.QtWidgets import (
     QApplication,
     QDialog,
     QDialogButtonBox,
+    QAbstractButton,
     QFrame,
     QGraphicsOpacityEffect,
     QHBoxLayout,
@@ -57,6 +60,26 @@ from .brand import ACCENT_BLUE, ACCENT_PURPLE, create_brand_icon, draw_brand_mar
 logger = logging.getLogger(__name__)
 
 
+def _system_animations_enabled() -> bool:
+    """Consulta la preferencia de animaciones del área cliente en Windows."""
+    if sys.platform != "win32":
+        return True
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        enabled = wintypes.BOOL()
+        success = ctypes.windll.user32.SystemParametersInfoW(
+            0x1042,  # SPI_GETCLIENTAREAANIMATION
+            0,
+            ctypes.byref(enabled),
+            0,
+        )
+        return bool(enabled.value) if success else True
+    except (AttributeError, OSError):
+        return True
+
+
 @dataclass
 class OverlayConfig:
     """Configuración visual y de comportamiento de la ventana."""
@@ -70,7 +93,7 @@ class OverlayConfig:
     bg_color: str = "#080b1d"
     text_color: str = "#ffffff"
     highlight_color: str = "#ffffff"
-    dim_color: str = "#3f4762"
+    dim_color: str = "#aeb5cf"
     translation_enabled: bool = True
     translation_font_size: int = 18
     translation_color: str = "#8b5cf6"
@@ -284,8 +307,11 @@ class LyricLabel(QWidget):
         self._base_active_size = config.highlight_font_size
         self._base_translation_size = config.translation_font_size
         self._animation: Optional[QPropertyAnimation] = None
+        self._hovered = False
+        self._keyboard_focused = False
 
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         outer = QHBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -323,6 +349,30 @@ class LyricLabel(QWidget):
         self._right_wave = WaveformWidget(mirrored=True, parent=self)
         outer.addWidget(self._right_wave, 2)
         self._apply_style()
+        self._update_accessible_text()
+
+    def _update_height_hint(self) -> None:
+        """Asegura espacio suficiente para texto envuelto y su traducción."""
+        if self._original_label.width() <= 0:
+            return
+
+        required_height = self._original_label.heightForWidth(
+            self._original_label.width()
+        )
+        if self._translation_label.isVisible():
+            required_height += self._translation_label.heightForWidth(
+                self._translation_label.width()
+            )
+        required_height += 7  # separación entre original y traducción
+        if self._focus_rule.isVisible():
+            required_height += self._focus_rule.minimumHeight() + 7
+
+        base_height = 142 if self._current else 88
+        self.setMinimumHeight(max(base_height, required_height + 4))
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self._update_height_hint()
 
     def set_responsive_sizes(
         self,
@@ -338,6 +388,7 @@ class LyricLabel(QWidget):
     def setText(self, text: str) -> None:
         self._original_label.setText(text)
         self._apply_style()
+        self._update_accessible_text()
 
     def text(self) -> str:
         return self._original_label.text()
@@ -351,6 +402,7 @@ class LyricLabel(QWidget):
         else:
             self._translation_label.setText(" ")
         self._apply_style()
+        self._update_accessible_text()
 
     def set_current(self, current: bool) -> None:
         became_current = current and not self._current
@@ -361,6 +413,7 @@ class LyricLabel(QWidget):
         if self._translation_pending and not self._translation_label.text().strip():
             self._translation_label.setText("Traduciendo…")
         self._apply_style()
+        self._update_accessible_text()
         if became_current:
             self.animate_in()
 
@@ -377,16 +430,25 @@ class LyricLabel(QWidget):
         self._translation_label.setVisible(visible)
         self._focus_rule.setVisible(self._current and visible)
         self._apply_style()
+        self._update_accessible_text()
 
     def set_line_info(self, index: int, timestamp_ms: int) -> None:
         self._real_line_index = index
         self._timestamp_ms = timestamp_ms
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self._update_accessible_text()
 
     def clear_line_info(self) -> None:
         self._real_line_index = -1
         self._timestamp_ms = 0
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._update_accessible_text()
 
     def animate_in(self) -> None:
+        if not _system_animations_enabled():
+            self.setGraphicsEffect(None)
+            self._animation = None
+            return
         effect = QGraphicsOpacityEffect(self)
         self.setGraphicsEffect(effect)
         animation = QPropertyAnimation(effect, b"opacity", self)
@@ -417,13 +479,13 @@ class LyricLabel(QWidget):
             translation_opacity = 1.0
         else:
             original_size = self._scaled_for_text(self._base_original_size)
-            alpha = 0.62 if self._distance <= 1 else 0.34
+            alpha = 0.72 if self._distance <= 1 else 0.65
             original_color = QColor(self._config.dim_color)
             original_color.setAlphaF(alpha)
             original_color = original_color.name(QColor.NameFormat.HexArgb)
             weight = 600
             translation_color_value = QColor(self._config.dim_color)
-            translation_color_value.setAlphaF(alpha * 0.86)
+            translation_color_value.setAlphaF(alpha)
             translation_color = translation_color_value.name(QColor.NameFormat.HexArgb)
             translation_weight = 450
             translation_opacity = alpha
@@ -460,11 +522,66 @@ class LyricLabel(QWidget):
         self._translation_label.setVisible(self._translation_visible)
         self._focus_rule.setVisible(self._current and self._translation_visible)
         self.setMinimumHeight(142 if self._current else 88)
+        self._update_height_hint()
         self.setToolTip(
             "Haz clic para sincronizar con esta línea"
             if self._real_line_index >= 0
             else ""
         )
+
+    def _update_accessible_text(self) -> None:
+        text = self.text().strip()
+        if not text:
+            self.setAccessibleName("Línea de letra vacía")
+            self.setAccessibleDescription("")
+            return
+        role = "Línea actual" if self._current else "Línea de contexto"
+        self.setAccessibleName(f"{role}: {text}")
+        details = []
+        translation = self._translation_label.text().strip()
+        if self._translation_visible and translation:
+            details.append(f"Traducción: {translation}")
+        if self._real_line_index >= 0:
+            details.append(
+                "Pulsa Entrar o Espacio para sincronizar con esta línea."
+            )
+        self.setAccessibleDescription(" ".join(details))
+
+    def _update_interaction_style(self) -> None:
+        if self._keyboard_focused:
+            self.setStyleSheet(
+                "LyricLabel {"
+                " background: rgba(139,92,246,0.10);"
+                " border: 2px solid rgba(196,181,253,0.90);"
+                " border-radius: 12px;"
+                " }"
+            )
+        elif self._hovered and not self._current:
+            self.setStyleSheet(
+                "LyricLabel {"
+                " background: rgba(255,255,255,0.025);"
+                " border: 2px solid transparent;"
+                " border-radius: 12px;"
+                " }"
+            )
+        else:
+            self.setStyleSheet("")
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if (
+            event.key()
+            in (
+                Qt.Key.Key_Return,
+                Qt.Key.Key_Enter,
+                Qt.Key.Key_Space,
+            )
+            and self._real_line_index >= 0
+            and self.text()
+        ):
+            self.line_clicked.emit(self._real_line_index, self._timestamp_ms)
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if (
@@ -478,15 +595,24 @@ class LyricLabel(QWidget):
         event.ignore()
 
     def enterEvent(self, event: QEvent) -> None:
-        if self._real_line_index >= 0 and not self._current:
-            self.setStyleSheet(
-                "LyricLabel { background: rgba(255,255,255,0.025); border-radius: 12px; }"
-            )
+        self._hovered = self._real_line_index >= 0
+        self._update_interaction_style()
         super().enterEvent(event)
 
     def leaveEvent(self, event: QEvent) -> None:
-        self.setStyleSheet("")
+        self._hovered = False
+        self._update_interaction_style()
         super().leaveEvent(event)
+
+    def focusInEvent(self, event: QEvent) -> None:
+        self._keyboard_focused = True
+        self._update_interaction_style()
+        super().focusInEvent(event)
+
+    def focusOutEvent(self, event: QEvent) -> None:
+        self._keyboard_focused = False
+        self._update_interaction_style()
+        super().focusOutEvent(event)
 
 
 class PlaybackProgress(QWidget):
@@ -498,6 +624,8 @@ class PlaybackProgress(QWidget):
         self._duration_ms = 0
         self.setFixedHeight(58)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setAccessibleName("Progreso de reproducción")
+        self._update_accessible_progress()
 
     @property
     def position_ms(self) -> int:
@@ -510,7 +638,15 @@ class PlaybackProgress(QWidget):
     def set_progress(self, position_ms: int, duration_ms: int) -> None:
         self._position_ms = max(0, position_ms)
         self._duration_ms = max(0, duration_ms)
+        self._update_accessible_progress()
         self.update()
+
+    def _update_accessible_progress(self) -> None:
+        position = _format_time(self._position_ms)
+        duration = _format_time(self._duration_ms, "duración desconocida")
+        self.setAccessibleDescription(
+            f"Posición {position}; duración {duration}."
+        )
 
     def paintEvent(self, event: QPaintEvent) -> None:
         painter = QPainter(self)
@@ -575,12 +711,68 @@ class PlaybackProgress(QWidget):
             painter.drawEllipse(QPoint(int(fill_right), int(track_y)), 6, 6)
 
 
+class TranslationButton(QAbstractButton):
+    """Control compacto con un icono visual de traducción y su estado."""
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self._enabled_state = True
+        self.setFixedSize(36, 30)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def set_translation_enabled(self, enabled: bool) -> None:
+        if self._enabled_state != enabled:
+            self._enabled_state = enabled
+            self.update()
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        del event
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        if self.underMouse() or self.hasFocus():
+            painter.setPen(QPen(QColor(139, 92, 246, 80), 1))
+            painter.setBrush(QColor(139, 92, 246, 42))
+            painter.drawRoundedRect(QRectF(0.5, 0.5, 35, 29), 8, 8)
+
+        active = self._enabled_state
+        first_color = QColor("#5b7cfa" if active else "#59617d")
+        second_color = QColor("#8b5cf6" if active else "#747b96")
+        text_color = QColor("#ffffff" if active else "#aeb5cf")
+
+        first = QPainterPath()
+        first.addRoundedRect(QRectF(3, 10, 18, 14), 6, 6)
+        first.moveTo(7, 22)
+        first.lineTo(5, 27)
+        first.lineTo(12, 23)
+        painter.fillPath(first, first_color)
+
+        second = QPainterPath()
+        second.addRoundedRect(QRectF(13, 3, 18, 14), 6, 6)
+        second.moveTo(25, 15)
+        second.lineTo(28, 20)
+        second.lineTo(21, 16)
+        painter.fillPath(second, second_color)
+
+        painter.setPen(text_color)
+        painter.setFont(QFont("Segoe UI Variable", 8, QFont.Weight.Bold))
+        painter.drawText(QRectF(7, 11, 9, 10), Qt.AlignmentFlag.AlignCenter, "A")
+        painter.drawText(QRectF(20, 4, 9, 10), Qt.AlignmentFlag.AlignCenter, "文")
+
+        painter.setPen(QPen(QColor("#0b1028"), 1))
+        painter.setBrush(QColor("#a3e635" if active else "#626a84"))
+        painter.drawEllipse(QPoint(31, 4), 3, 3)
+
+
 class WindowTitleBar(QFrame):
     """Barra personalizada con marca, metadatos y controles de Windows."""
 
     minimize_requested = pyqtSignal()
     maximize_requested = pyqtSignal()
     close_requested = pyqtSignal()
+    manage_lyrics_requested = pyqtSignal()
+    translation_toggle_requested = pyqtSignal()
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -641,16 +833,27 @@ class WindowTitleBar(QFrame):
         controls = QWidget()
         controls.setFixedWidth(300)
         controls_layout = QHBoxLayout(controls)
-        controls_layout.setContentsMargins(140, 0, 0, 0)
+        controls_layout.setContentsMargins(64, 0, 0, 0)
         controls_layout.setSpacing(8)
+        self.manage_button = self._make_button("♫", "Gestionar letras")
+        self.translation_button = TranslationButton()
+        self.translation_button.setToolTip("Mostrar/ocultar traducción")
+        self.translation_button.setAccessibleName("Mostrar/ocultar traducción")
+        self.translation_button.setAccessibleDescription(
+            "Activa o desactiva la visibilidad de las traducciones."
+        )
         self.minimize_button = self._make_button("—", "Minimizar")
         self.maximize_button = self._make_button("□", "Maximizar")
         self.close_button = self._make_button("×", "Ocultar en la bandeja", close=True)
+        controls_layout.addWidget(self.manage_button)
+        controls_layout.addWidget(self.translation_button)
         controls_layout.addWidget(self.minimize_button)
         controls_layout.addWidget(self.maximize_button)
         controls_layout.addWidget(self.close_button)
         layout.addWidget(controls)
 
+        self.manage_button.clicked.connect(self.manage_lyrics_requested)
+        self.translation_button.clicked.connect(self.translation_toggle_requested)
         self.minimize_button.clicked.connect(self.minimize_requested)
         self.maximize_button.clicked.connect(self.maximize_requested)
         self.close_button.clicked.connect(self.close_requested)
@@ -660,7 +863,12 @@ class WindowTitleBar(QFrame):
         button = QPushButton(text)
         button.setFixedSize(42, 34)
         button.setToolTip(tooltip)
+        button.setAccessibleName(tooltip)
+        button.setAccessibleDescription(
+            f"Control de ventana: {tooltip.lower()}."
+        )
         button.setCursor(Qt.CursorShape.PointingHandCursor)
+        button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         hover = (
             "background:rgba(225,70,90,0.85); color:white;"
             if close
@@ -677,14 +885,36 @@ class WindowTitleBar(QFrame):
                 font-size: 22px;
             }}
             QPushButton:hover {{ {hover} }}
+            QPushButton:focus {{
+                border: 2px solid #c4b5fd;
+                background: rgba(139,92,246,0.18);
+            }}
             QPushButton:pressed {{ background: rgba(91,124,250,0.28); }}
             """
         )
         return button
 
+    def set_maximized(self, maximized: bool) -> None:
+        text = "❐" if maximized else "□"
+        action = "Restaurar" if maximized else "Maximizar"
+        self.maximize_button.setText(text)
+        self.maximize_button.setToolTip(action)
+        self.maximize_button.setAccessibleName(action)
+
     def set_track(self, title: str, artist: str) -> None:
         self.title_label.setText(title or "Esperando música")
         self.artist_label.setText(artist or "Abre Qobuz para comenzar")
+
+    def set_translation_enabled(self, enabled: bool) -> None:
+        """Actualiza el estado accesible del control compacto de traducción."""
+        state = "activada" if enabled else "desactivada"
+        self.translation_button.setToolTip(
+            f"Traducción {state}. Clic para cambiar"
+        )
+        self.translation_button.setAccessibleName(
+            f"Traducción {state}. Clic para cambiar"
+        )
+        self.translation_button.set_translation_enabled(enabled)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
@@ -728,13 +958,20 @@ class SyncTimeDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 22, 24, 20)
         layout.setSpacing(12)
-        layout.addWidget(QLabel("Posición de la línea seleccionada (mm:ss)"))
+        input_label = QLabel("&Posición de la línea seleccionada (mm:ss)")
         self._input = QLineEdit(_format_time(current_position_ms))
         self._input.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._input.setPlaceholderText("01:24")
+        self._input.setAccessibleName("Posición de la línea")
+        self._input.setAccessibleDescription(
+            "Escribe minutos y segundos con el formato mm:ss."
+        )
+        input_label.setBuddy(self._input)
+        layout.addWidget(input_label)
         layout.addWidget(self._input)
         self._error = QLabel("")
         self._error.setStyleSheet("color:#f87171;")
+        self._error.setAccessibleName("Error de posición")
         layout.addWidget(self._error)
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Cancel
@@ -757,6 +994,8 @@ class SyncTimeDialog(QDialog):
             self.accept()
         else:
             self._error.setText("Usa el formato mm:ss; los segundos deben ser menores a 60.")
+            self._input.setFocus()
+            self._input.selectAll()
 
     def get_time_ms(self) -> Optional[int]:
         if not self._is_valid_time(self._input.text()):
@@ -772,6 +1011,8 @@ class LyricsOverlay(QWidget):
     move_requested = pyqtSignal()
     sync_time_changed = pyqtSignal(int)
     quit_requested = pyqtSignal()
+    manage_lyrics_requested = pyqtSignal()
+    translation_toggle_requested = pyqtSignal()
 
     def __init__(self, config: Optional[OverlayConfig] = None):
         super().__init__()
@@ -832,6 +1073,13 @@ class LyricsOverlay(QWidget):
         self.title_bar.minimize_requested.connect(self.showMinimized)
         self.title_bar.maximize_requested.connect(self._on_maximize_clicked)
         self.title_bar.close_requested.connect(self._on_close_clicked)
+        self.title_bar.manage_lyrics_requested.connect(
+            self.manage_lyrics_requested
+        )
+        self.title_bar.translation_toggle_requested.connect(
+            self.translation_toggle_requested
+        )
+        self.title_bar.set_translation_enabled(self.config.translation_enabled)
         container_layout.addWidget(self.title_bar)
 
         self.lyrics_host = QWidget(self.container)
@@ -865,6 +1113,7 @@ class LyricsOverlay(QWidget):
         controls_layout.addWidget(self._back_to_auto_btn)
 
         self.offset_indicator = QLabel()
+        self.offset_indicator.setAccessibleName("Estado de sincronización")
         self.offset_indicator.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.offset_indicator.setStyleSheet(
             """
@@ -1133,6 +1382,13 @@ class LyricsOverlay(QWidget):
         sign = "+" if offset_ms >= 0 else ""
         self._show_indicator(f"Sincronización {sign}{offset_ms} ms")
 
+    def show_always_on_top_indicator(self, enabled: bool) -> None:
+        self._show_indicator(
+            "Ventana siempre encima activada"
+            if enabled
+            else "Ventana siempre encima desactivada"
+        )
+
     def _show_indicator(self, message: str, duration_ms: int = 2200) -> None:
         self.offset_indicator.setText(message)
         self.offset_indicator.show()
@@ -1153,6 +1409,7 @@ class LyricsOverlay(QWidget):
 
     def toggle_translation(self) -> bool:
         self.config.translation_enabled = not self.config.translation_enabled
+        self.title_bar.set_translation_enabled(self.config.translation_enabled)
         for label in self.line_labels:
             label.set_translation_visible(self.config.translation_enabled)
         self._show_indicator(
@@ -1161,6 +1418,13 @@ class LyricsOverlay(QWidget):
             else "Traducción desactivada"
         )
         return self.config.translation_enabled
+
+    def set_translation_enabled(self, enabled: bool) -> None:
+        """Actualiza el estado de traducción y su control visual."""
+        self.config.translation_enabled = enabled
+        self.title_bar.set_translation_enabled(enabled)
+        for label in self.line_labels:
+            label.set_translation_visible(enabled)
 
     def set_no_lyrics_available(self, artist: str = "", title: str = "") -> None:
         self._lyrics = None
@@ -1188,19 +1452,17 @@ class LyricsOverlay(QWidget):
         self.title_bar.set_track(title, artist)
 
     def _on_close_clicked(self) -> None:
-        self.hide()
-        self.closed.emit()
+        """Oculta la ventana y mantiene la aplicación en la bandeja."""
+        self.close()
 
     def _on_maximize_clicked(self) -> None:
         if self.isMaximized():
             self.showNormal()
-            self.title_bar.maximize_button.setText("□")
-            self.title_bar.maximize_button.setToolTip("Maximizar")
+            self.title_bar.set_maximized(False)
         else:
             self._normal_geometry = self.geometry()
             self.showMaximized()
-            self.title_bar.maximize_button.setText("❐")
-            self.title_bar.maximize_button.setToolTip("Restaurar")
+            self.title_bar.set_maximized(True)
 
     def _show_sync_dialog(self) -> None:
         dialog = SyncTimeDialog(self, self._current_position_ms)
@@ -1305,7 +1567,7 @@ class LyricsOverlay(QWidget):
             maximized = self.isMaximized()
             margin = 0 if maximized else 18
             self._root_layout.setContentsMargins(margin, margin, margin, margin)
-            self.title_bar.maximize_button.setText("❐" if maximized else "□")
+            self.title_bar.set_maximized(maximized)
             self.container.update()
 
     def closeEvent(self, event: QCloseEvent) -> None:
