@@ -7,7 +7,8 @@ from src.translation_service import (
     TranslationService,
     _get_translatable_lines,
     _resolve_translation_direction,
-    is_english_lyrics,
+    _detect_language,
+    is_translation_enabled_by_default,
 )
 
 
@@ -91,6 +92,16 @@ def test_translation_is_enabled_by_default_only_for_english_lyrics():
             LyricLine(2000, "Ven y quédate aquí"),
         ]
     )
+    italian = LyricsData(
+        lines=[
+            LyricLine(1000, "Il mio amore è per te"),
+            LyricLine(2000, "Sono qui con il cuore"),
+            LyricLine(3000, "Vivo questa notte con te"),
+        ]
+    )
 
-    assert is_english_lyrics(english) is True
-    assert is_english_lyrics(spanish) is False
+    assert is_translation_enabled_by_default(english) is True
+    assert is_translation_enabled_by_default(spanish) is False
+    assert is_translation_enabled_by_default(italian) is True
+    assert _detect_language("Il mio amore è per te") == ("it", "es")
+    assert _detect_language("Quando sono con te, amore mio") == ("it", "es")

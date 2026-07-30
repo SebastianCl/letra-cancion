@@ -26,7 +26,10 @@ from .lyrics_library import (
     track_metadata_matches,
 )
 from .lrc_parser import LyricsData
-from .translation_service import TranslationService, is_english_lyrics
+from .translation_service import (
+    TranslationService,
+    is_translation_enabled_by_default,
+)
 from .sync_engine import SyncEngine, SyncState, SyncMode
 from .hotkeys import HotkeyManager, HotkeyAction, KEYBOARD_AVAILABLE
 from .settings import SettingsManager
@@ -395,8 +398,9 @@ class LetraCancionApp:
             "translation_enabled",
             getattr(self, "_translation_enabled", True),
         )
-        self._translation_enabled = translation_preference and is_english_lyrics(
-            lyrics_data
+        self._translation_enabled = (
+            translation_preference
+            and is_translation_enabled_by_default(lyrics_data)
         )
         if self.overlay and hasattr(self.overlay, "set_translation_enabled"):
             self.overlay.set_translation_enabled(self._translation_enabled)

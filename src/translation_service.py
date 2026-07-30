@@ -248,6 +248,41 @@ def _is_english_text(text: str) -> bool:
     return matches >= 3
 
 
+def _is_italian_text(text: str) -> bool:
+    """Detecta si el texto está en italiano usando palabras frecuentes."""
+    italian_indicators = [
+        r"\bil\b",
+        r"\blo\b",
+        r"\bgli\b",
+        r"\bche\b",
+        r"\bdi\b",
+        r"\bsono\b",
+        r"\bsei\b",
+        r"\bnon\b",
+        r"\bper\b",
+        r"\bcon\b",
+        r"\bquesta\b",
+        r"\bquesto\b",
+        r"\bamore\b",
+        r"\bcuore\b",
+        r"\bvita\b",
+        r"\bnotte\b",
+        r"\bsempre\b",
+        r"\bmai\b",
+        r"\bdove\b",
+        r"\bquando\b",
+        r"\bcome\b",
+        r"\btutto\b",
+        r"\bniente\b",
+        r"\bmio\b",
+        r"\bmia\b",
+    ]
+
+    text_lower = text.lower()
+    matches = sum(1 for pattern in italian_indicators if re.search(pattern, text_lower))
+    return matches >= 3
+
+
 def _detect_language(text: str) -> tuple[str, str]:
     """
     Detecta el idioma del texto y retorna la dirección de traducción.
@@ -258,8 +293,13 @@ def _detect_language(text: str) -> tuple[str, str]:
     """
     is_spanish = _is_spanish_text(text)
     is_english = _is_english_text(text)
+    is_italian = _is_italian_text(text)
 
-    if is_spanish and not is_english:
+    if is_italian and not is_english:
+        # Texto en italiano → traducir a español. Se prioriza sobre español
+        # porque ambos idiomas comparten varias palabras frecuentes.
+        return ("it", "es")
+    elif is_spanish and not is_english:
         # Texto en español → traducir a inglés
         return ("es", "en")
     elif is_english and not is_spanish:
@@ -273,16 +313,20 @@ def _detect_language(text: str) -> tuple[str, str]:
         return ("auto", "es")
 
 
-def is_english_lyrics(lyrics: LyricsData) -> bool:
-    """Indica si una letra parece estar escrita en inglés.
+def is_translation_enabled_by_default(lyrics: LyricsData) -> bool:
+    """Indica si una letra debe traducirse automáticamente por defecto.
 
-    La traducción automática solo se activa por defecto para letras cuyo
-    idioma de origen se identifica explícitamente como inglés. Los textos
-    ambiguos o en otros idiomas quedan desactivados por defecto.
+    Se activa para letras cuyo idioma de origen se identifica explícitamente
+    como inglés o italiano. Los textos ambiguos o en otros idiomas quedan
+    desactivados por defecto.
     """
     all_text = " ".join(line.text for line in lyrics.lines if line.text.strip())
     source_lang, _ = _detect_language(all_text)
-    return source_lang == "en"
+    return source_lang in {"en", "it"}
+
+
+# Compatibilidad con consumidores que usaban el nombre anterior.
+is_english_lyrics = is_translation_enabled_by_default
 
 
 def _is_instrumental_line(text: str) -> bool:
