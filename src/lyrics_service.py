@@ -854,6 +854,10 @@ class LyricsService:
         self.cache.delete(artist, title)
         return saved
 
+    def delete_user_lyrics(self, artist: str, title: str) -> bool:
+        """Elimina una versión local sin afectar el caché de proveedores."""
+        return self.library.delete(artist, title)
+
     async def search_with_fallback(
         self,
         artist: str,

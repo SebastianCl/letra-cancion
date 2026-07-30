@@ -99,6 +99,7 @@ class LyricsManagerDialog(QDialog):
     preview_requested = pyqtSignal(object)
     apply_requested = pyqtSignal(object)
     save_requested = pyqtSignal(object)
+    delete_requested = pyqtSignal(object)
     capture_requested = pyqtSignal(int)
 
     def __init__(self, parent: Optional[QWidget] = None):
@@ -136,6 +137,11 @@ class LyricsManagerDialog(QDialog):
             }
             QPushButton:hover { background:#825df8; }
             QPushButton:disabled { background:#303550; color:#777e9d; }
+            QPushButton#dangerButton { background:#8f2942; }
+            QPushButton#dangerButton:hover { background:#b33452; }
+            QPushButton#dangerButton:disabled {
+                background:#303550; color:#777e9d;
+            }
             QTabBar::tab {
                 background:#111735; color:#aeb3cc; padding:10px 22px;
                 border-top-left-radius:7px; border-top-right-radius:7px;
@@ -220,10 +226,13 @@ class LyricsManagerDialog(QDialog):
         self.apply_button = QPushButton("Aplicar a Qobuz")
         self.save_copy_button = QPushButton("Guardar copia")
         self.edit_button = QPushButton("Editar")
+        self.delete_button = QPushButton("Eliminar local")
+        self.delete_button.setObjectName("dangerButton")
         for button in (
             self.apply_button,
             self.save_copy_button,
             self.edit_button,
+            self.delete_button,
         ):
             button.setEnabled(False)
             actions.addWidget(button)
@@ -244,6 +253,7 @@ class LyricsManagerDialog(QDialog):
         self.apply_button.clicked.connect(self._apply_preview)
         self.save_copy_button.clicked.connect(self._save_preview_copy)
         self.edit_button.clicked.connect(self._edit_preview)
+        self.delete_button.clicked.connect(self._delete_preview)
 
     def _build_editor_tab(self) -> None:
         tab = QWidget()
@@ -467,6 +477,9 @@ class LyricsManagerDialog(QDialog):
         )
         self.save_copy_button.setEnabled(loaded)
         self.edit_button.setEnabled(loaded)
+        self.delete_button.setEnabled(
+            loaded and bool(self._preview_candidate.is_local)
+        )
         self.apply_button.setEnabled(
             loaded
             and _metadata_matches_track(
@@ -504,6 +517,47 @@ class LyricsManagerDialog(QDialog):
             self._preview_lyrics,
             duration_ms=self._preview_candidate.duration_ms,
             source=self._preview_candidate.provider,
+        )
+
+    def _delete_preview(self) -> None:
+        candidate = self._preview_candidate
+        if candidate is None or not candidate.is_local:
+            return
+        response = QMessageBox.question(
+            self,
+            "Eliminar letra local",
+            (
+                f"¿Eliminar la letra local de "
+                f"{candidate.artist} — {candidate.title}?\n\n"
+                "Esta acción no se puede deshacer. La aplicación volverá "
+                "a buscar la letra en el caché y los proveedores."
+            ),
+            QMessageBox.StandardButton.Yes
+            | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if response == QMessageBox.StandardButton.Yes:
+            self.delete_requested.emit(candidate)
+
+    def remove_candidate(self, candidate: LyricsCandidate) -> None:
+        """Retira de la lista un resultado local eliminado."""
+        for row in range(self.results_list.count()):
+            item = self.results_list.item(row)
+            stored = item.data(Qt.ItemDataRole.UserRole)
+            if (
+                stored is candidate
+                or (
+                    isinstance(stored, LyricsCandidate)
+                    and stored.provider == candidate.provider
+                    and stored.provider_id == candidate.provider_id
+                )
+            ):
+                self.results_list.takeItem(row)
+                break
+        self._clear_preview()
+        self.search_status_label.setText(
+            f"Se eliminó la letra local de "
+            f"{candidate.artist} — {candidate.title}."
         )
 
     def start_new_entry(self) -> None:

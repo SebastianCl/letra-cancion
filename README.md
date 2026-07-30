@@ -76,6 +76,7 @@ el menú del icono de la bandeja.
 
 - Busca por artista y título en la biblioteca local, LRCLIB y NetEase.
 - Previsualiza una coincidencia antes de aplicarla, guardarla o editarla.
+- Elimina una versión local desde su previsualización, con confirmación.
 - Agrega una letra pegando texto plano, contenido LRC o importando un archivo
   `.lrc`.
 - Edita el texto y los tiempos en formato `mm:ss.xx`.

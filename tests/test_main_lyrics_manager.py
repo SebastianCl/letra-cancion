@@ -19,6 +19,7 @@ class FakeLyricsService:
     def __init__(self):
         self.cache = FakeCache()
         self.saved = []
+        self.deleted = []
 
     def has_user_lyrics(self, artist, title):
         return False
@@ -34,17 +35,25 @@ class FakeLyricsService:
             lyrics_data=kwargs["lyrics_data"],
         )
 
+    def delete_user_lyrics(self, artist, title):
+        self.deleted.append((artist, title))
+        return True
+
 
 class FakeManager:
     def __init__(self):
         self.saved_success = []
         self.captured = []
+        self.removed = []
 
     def show_save_success(self, artist, title):
         self.saved_success.append((artist, title))
 
     def set_captured_timestamp(self, row, timestamp_ms):
         self.captured.append((row, timestamp_ms))
+
+    def remove_candidate(self, candidate):
+        self.removed.append(candidate)
 
 
 class FakeTranslationService:
@@ -58,21 +67,29 @@ class FakeTranslationService:
 class FakeSyncEngine:
     def __init__(self):
         self.loaded = []
+        self.cleared = 0
 
     def set_lyrics(self, lyrics, duration_ms):
         self.loaded.append((lyrics, duration_ms))
+
+    def clear_lyrics(self):
+        self.cleared += 1
 
 
 class FakeOverlay:
     def __init__(self):
         self.loaded = []
         self.offsets = []
+        self.searching = []
 
     def set_lyrics(self, lyrics, duration_ms):
         self.loaded.append((lyrics, duration_ms))
 
     def show_offset_indicator(self, offset_ms):
         self.offsets.append(offset_ms)
+
+    def set_searching_lyrics(self, source=""):
+        self.searching.append(source)
 
 
 class FakeTray:
@@ -164,3 +181,36 @@ def test_capture_uses_interpolated_qobuz_position():
     app._on_manager_capture_requested(2)
 
     assert app.lyrics_manager.captured == [(2, 32500)]
+
+
+def test_delete_current_local_lyrics_refreshes_from_providers(monkeypatch):
+    app = make_app()
+    candidate = LyricsCandidate(
+        provider="Biblioteca local",
+        provider_id="radiohead-creep",
+        artist="Radiohead",
+        title="Creep",
+        is_local=True,
+        lyrics_data=make_lyrics(),
+    )
+    scheduled = []
+
+    async def fake_fetch(track):
+        return track
+
+    def fake_create_task(coroutine):
+        scheduled.append(coroutine)
+        coroutine.close()
+        return SimpleNamespace()
+
+    app._fetch_lyrics = fake_fetch
+    monkeypatch.setattr("src.main.asyncio.create_task", fake_create_task)
+
+    app._on_manager_delete_requested(candidate)
+
+    assert app.lyrics_service.deleted == [("Radiohead", "Creep")]
+    assert app.translation_service.invalidated == [("Radiohead", "Creep")]
+    assert app.lyrics_manager.removed == [candidate]
+    assert app.sync_engine.cleared == 1
+    assert app.overlay.searching == ["proveedores"]
+    assert len(scheduled) == 1

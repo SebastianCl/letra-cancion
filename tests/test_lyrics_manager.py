@@ -1,6 +1,7 @@
 import pytest
 
 from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QMessageBox
 
 from src.lrc_parser import LyricLine, LyricsData
 from src.lyrics_library import LyricsCandidate
@@ -12,7 +13,7 @@ from src.ui.lyrics_manager import (
 )
 
 
-def make_candidate():
+def make_candidate(is_local=False):
     lyrics = LyricsData(
         lines=[
             LyricLine(5000, "First line"),
@@ -31,6 +32,7 @@ def make_candidate():
         album="Pablo Honey",
         duration_ms=238000,
         is_synced=True,
+        is_local=is_local,
         lyrics_data=lyrics,
     )
 
@@ -127,3 +129,29 @@ def test_synced_editor_requires_strictly_increasing_times(qtbot):
 
     with pytest.raises(ValueError, match="estrictamente crecientes"):
         dialog._build_save_request()
+
+
+def test_delete_is_available_only_for_local_candidate(qtbot, monkeypatch):
+    dialog = LyricsManagerDialog()
+    qtbot.addWidget(dialog)
+    remote = make_candidate()
+    dialog.set_search_results([remote])
+    dialog.set_preview(remote, remote.lyrics_data)
+
+    assert dialog.delete_button.isEnabled() is False
+
+    local = make_candidate(is_local=True)
+    dialog.set_search_results([local])
+    dialog.set_preview(local, local.lyrics_data)
+    monkeypatch.setattr(
+        "src.ui.lyrics_manager.QMessageBox.question",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
+    )
+
+    with qtbot.waitSignal(dialog.delete_requested, timeout=1000) as signal:
+        qtbot.mouseClick(dialog.delete_button, Qt.MouseButton.LeftButton)
+    assert signal.args[0] is local
+
+    dialog.remove_candidate(local)
+    assert dialog.results_list.count() == 0
+    assert dialog.delete_button.isEnabled() is False

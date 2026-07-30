@@ -231,6 +231,9 @@ class LetraCancionApp:
             self.lyrics_manager.save_requested.connect(
                 self._on_manager_save_requested
             )
+            self.lyrics_manager.delete_requested.connect(
+                self._on_manager_delete_requested
+            )
             self.lyrics_manager.capture_requested.connect(
                 self._on_manager_capture_requested
             )
@@ -597,6 +600,49 @@ class LetraCancionApp:
             if playback is not None:
                 position_ms = max(0, int(playback.position_ms))
         self.lyrics_manager.set_captured_timestamp(row, position_ms)
+
+    def _on_manager_delete_requested(
+        self, candidate: LyricsCandidate
+    ) -> None:
+        if not candidate.is_local:
+            return
+        try:
+            deleted = self.lyrics_service.delete_user_lyrics(
+                candidate.artist, candidate.title
+            )
+            if not deleted:
+                raise FileNotFoundError(
+                    "La letra local ya no existe en la biblioteca."
+                )
+            if self.translation_service:
+                self.translation_service.invalidate_track(
+                    candidate.artist, candidate.title
+                )
+        except Exception as exc:
+            logger.error("Error eliminando letra local: %s", exc)
+            QMessageBox.critical(
+                self.lyrics_manager,
+                "No se pudo eliminar",
+                f"No se pudo eliminar la letra local.\n\n{exc}",
+            )
+            return
+
+        self.lyrics_manager.remove_candidate(candidate)
+        if self.tray:
+            self.tray.show_notification(
+                "Letra local eliminada",
+                f"{candidate.artist} — {candidate.title}",
+                duration_ms=2500,
+            )
+
+        if self._track_matches_metadata(
+            self._current_track, candidate.artist, candidate.title
+        ):
+            if self._translation_cancel_event:
+                self._translation_cancel_event.set()
+            self.sync_engine.clear_lyrics()
+            self.overlay.set_searching_lyrics("proveedores")
+            asyncio.create_task(self._fetch_lyrics(self._current_track))
 
     def _on_playback_changed(self, playback: PlaybackInfo) -> None:
         """Callback cuando cambia el estado de reproducción."""

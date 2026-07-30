@@ -291,6 +291,14 @@ class UserLyricsLibrary:
     def exists(self, artist: str, title: str) -> bool:
         return self._path_for(artist, title).exists()
 
+    def delete(self, artist: str, title: str) -> bool:
+        """Elimina únicamente la entrada identificada por sus metadatos exactos."""
+        path = self._path_for(artist, title)
+        if not path.exists():
+            return False
+        path.unlink()
+        return True
+
     def all_entries(self) -> list[UserLyricsEntry]:
         entries: list[UserLyricsEntry] = []
         for path in self.library_dir.glob("*.json"):
