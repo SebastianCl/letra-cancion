@@ -4,9 +4,11 @@
 
 Este repositorio contiene una aplicación de escritorio en Python, exclusiva para Windows, que muestra letras sincronizadas de Qobuz. El código de la aplicación está en `src/`. Usa `src/main.py` como punto de entrada; las clases de datos compartidas están en `src/models.py`. La detección de música, obtención y traducción de letras, sincronización, atajos y configuración persistente se organizan en módulos como `detector.py`, `lyrics_service.py` y `sync_engine.py`. El código de presentación con PyQt6 pertenece en `src/ui/`.
 
-La gestión de letras personales se divide entre `lyrics_library.py`, que persiste y compara candidatos, y `ui/lyrics_manager.py`, que implementa la búsqueda, previsualización, importación y edición LRC. `ui/brand.py` contiene la identidad visual compartida. Las letras personales se guardan en `~/.lyrics-cache/library/` y tienen prioridad sobre las fuentes remotas.
+La gestión de letras personales se divide entre `lyrics_library.py`, que persiste y compara candidatos, y `ui/lyrics_manager.py`, que implementa la búsqueda, previsualización, importación y edición LRC. `ui/brand.py` contiene la identidad visual compartida. `storage.py` centraliza lecturas limitadas y escrituras atómicas, rechazando enlaces y rutas no regulares. Las letras personales se guardan en `~/.lyrics-cache/library/` y tienen prioridad sobre las fuentes remotas.
 
-Los scripts de PowerShell de la raíz gestionan el inicio local y el empaquetado mediante `app.spec` y `launcher.py`. La configuración y las letras almacenadas en caché se guardan fuera del repositorio, en `~/.lyrics-cache/`. No confirmes en Git datos de caché ni los directorios `.venv/`, `venv/`, `build/`, `dist/`, `.pytest_cache/` o `graphify-out/`.
+`translation_service.py` detecta inglés, italiano y español: la traducción automática predeterminada es inglés/italiano → español; español → inglés requiere activación manual. La traducción se ejecuta progresivamente y se persiste por idioma destino en `~/.lyrics-cache/translations/`.
+
+Los scripts de PowerShell de la raíz gestionan el inicio local y el empaquetado mediante `app.spec` y `launcher.py`. La configuración, las letras descargadas, las traducciones y la biblioteca personal se guardan fuera del repositorio, en `~/.lyrics-cache/` (`settings.json`, `synced/`, `plain/`, `translations/` y `library/`). No confirmes en Git datos de caché ni los directorios `.venv/`, `venv/`, `build/`, `dist/`, `.pytest_cache/` o `graphify-out/`.
 
 ## Comandos de compilación, pruebas y desarrollo
 
@@ -26,14 +28,14 @@ Sigue PEP 8 con sangría de cuatro espacios. Usa `snake_case` para módulos, fun
 
 ## Pautas para pruebas
 
-La suite automatizada está en `tests/` y no tiene un umbral de cobertura configurado. Las pruebas siguen el patrón `test_<modulo>.py`, cubren la detección, servicios de letras, biblioteca personal, gestor/editor, overlay, configuración y sincronización. Para cambios de lógica, añade pruebas específicas con `pytest` y simula las API externas y los servicios de Windows. Antes de enviar cambios, ejecuta:
+La suite automatizada está en `tests/` y no tiene un umbral de cobertura configurado. Las pruebas siguen el patrón `test_<modulo>.py`, cubren la detección, servicios de letras, biblioteca personal, gestor/editor, overlay, configuración, almacenamiento seguro, traducción y sincronización. Para cambios de lógica, añade pruebas específicas con `pytest` y simula las API externas y los servicios de Windows. Antes de enviar cambios, ejecuta:
 
 ```powershell
 python -m compileall src launcher.py
 python -m pytest
 ```
 
-Prueba manualmente en Windows cualquier comportamiento afectado del overlay, bandeja, atajos, sincronización, traducción o editor LRC.
+Prueba manualmente en Windows cualquier comportamiento afectado del overlay, bandeja, atajos, sincronización, traducción automática/manual o editor LRC. Al cambiar persistencia, conserva los límites de tamaño, validación de rutas y escritura atómica cubiertos por `test_storage_security.py`.
 
 ## Pautas para commits y pull requests
 

@@ -15,9 +15,10 @@ Detecta automáticamente la canción que estás reproduciendo en Qobuz, busca la
 - **Panel de configuración** para personalizar apariencia y comportamiento
 - **Ayuda integrada** con referencia rápida de atajos
 - **Fallback inteligente**: si no hay letra sincronizada, muestra scroll estimado
-- **Biblioteca local y funcionamiento offline**: cada letra encontrada se
-  guarda en `~/.lyrics-cache/library/` y se reutiliza aunque no haya conexión
-  a Internet
+- **Biblioteca local y funcionamiento offline**: las versiones personales se
+  guardan en `~/.lyrics-cache/library/` y se reutilizan aunque no haya conexión
+  a Internet; las letras y traducciones descargadas también tienen cachés
+  separados
 - **Gestor de letras** para buscar cualquier canción, previsualizar resultados y guardar versiones personales
 - **Editor LRC** con pegado, importación, tiempos manuales y captura en vivo desde Qobuz
 - **Persistencia** de posición, tamaño, estado maximizado y preferencias de ventana
@@ -121,6 +122,7 @@ letra-cancion/
 │   ├── lyrics_service.py    # Búsqueda de letras
 │   ├── lyrics_library.py    # Biblioteca local de letras personales
 │   ├── translation_service.py # Detección y traducción de letras
+│   ├── storage.py           # Lectura y escritura persistente segura
 │   ├── sync_engine.py       # Motor de sincronización
 │   ├── lrc_parser.py        # Parser formato LRC
 │   ├── hotkeys.py           # Hotkeys globales
@@ -154,11 +156,11 @@ Opciones disponibles:
 - **Traducción automática** activar/desactivar
 - **Siempre encima** activar/desactivar
 
-La configuración se guarda automáticamente en `~/.lyrics-cache/settings.json`.
-
-Las letras traducidas, las respuestas reutilizables y la biblioteca local se
-almacenan en `~/.lyrics-cache/`; no deben confirmarse en Git. Las letras se
-guardan exclusivamente en `~/.lyrics-cache/library/`.
+La configuración se guarda en `~/.lyrics-cache/settings.json`. Las versiones
+personales se almacenan en `~/.lyrics-cache/library/`, las letras descargadas
+en `~/.lyrics-cache/synced/` y `~/.lyrics-cache/plain/`, y las traducciones en
+`~/.lyrics-cache/translations/`. Estas rutas están fuera del repositorio y no
+deben confirmarse en Git.
 
 ### Ajuste de sincronización
 
@@ -177,6 +179,13 @@ El sistema usa fuentes abiertas y gratuitas:
 2. **NetEase Music** (fallback): Servicio de música chino con buena cobertura
 
 Si no se encuentra letra sincronizada, se muestra la letra plana con scroll automático estimado.
+
+### Traducción automática
+
+La aplicación detecta el idioma de la letra y activa por defecto la traducción
+para inglés e italiano hacia español. Para letras en español, la traducción
+hacia inglés se activa manualmente desde `Ctrl+T`, el menú de la bandeja o el
+botón de traducción de la ventana.
 
 ## ⚠️ Limitaciones
 
