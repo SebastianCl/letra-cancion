@@ -273,6 +273,18 @@ def _detect_language(text: str) -> tuple[str, str]:
         return ("auto", "es")
 
 
+def is_english_lyrics(lyrics: LyricsData) -> bool:
+    """Indica si una letra parece estar escrita en inglés.
+
+    La traducción automática solo se activa por defecto para letras cuyo
+    idioma de origen se identifica explícitamente como inglés. Los textos
+    ambiguos o en otros idiomas quedan desactivados por defecto.
+    """
+    all_text = " ".join(line.text for line in lyrics.lines if line.text.strip())
+    source_lang, _ = _detect_language(all_text)
+    return source_lang == "en"
+
+
 def _is_instrumental_line(text: str) -> bool:
     """Detecta si una línea es instrumental o no tiene contenido traducible."""
     text_lower = text.lower().strip()

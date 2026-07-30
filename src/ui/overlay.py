@@ -1419,6 +1419,13 @@ class LyricsOverlay(QWidget):
         )
         return self.config.translation_enabled
 
+    def set_translation_enabled(self, enabled: bool) -> None:
+        """Actualiza el estado de traducción y su control visual."""
+        self.config.translation_enabled = enabled
+        self.title_bar.set_translation_enabled(enabled)
+        for label in self.line_labels:
+            label.set_translation_visible(enabled)
+
     def set_no_lyrics_available(self, artist: str = "", title: str = "") -> None:
         self._lyrics = None
         self._show_message(

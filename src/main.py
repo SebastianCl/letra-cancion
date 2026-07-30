@@ -26,7 +26,7 @@ from .lyrics_library import (
     track_metadata_matches,
 )
 from .lrc_parser import LyricsData
-from .translation_service import TranslationService
+from .translation_service import TranslationService, is_english_lyrics
 from .sync_engine import SyncEngine, SyncState, SyncMode
 from .hotkeys import HotkeyManager, HotkeyAction, KEYBOARD_AVAILABLE
 from .settings import SettingsManager
@@ -385,6 +385,24 @@ class LetraCancionApp:
         lyrics_data.title = track.title
         if track.album:
             lyrics_data.album = track.album
+
+        # La traducción se activa automáticamente solo para letras en inglés.
+        # La preferencia persistente sigue permitiendo desactivarla por completo.
+        settings_manager = getattr(self, "settings_manager", None)
+        settings = getattr(settings_manager, "settings", None)
+        translation_preference = getattr(
+            settings,
+            "translation_enabled",
+            getattr(self, "_translation_enabled", True),
+        )
+        self._translation_enabled = translation_preference and is_english_lyrics(
+            lyrics_data
+        )
+        if self.overlay and hasattr(self.overlay, "set_translation_enabled"):
+            self.overlay.set_translation_enabled(self._translation_enabled)
+        if self.tray and hasattr(self.tray, "set_translation_enabled"):
+            self.tray.set_translation_enabled(self._translation_enabled)
+
         self.sync_engine.set_lyrics(lyrics_data, duration_ms)
         self.overlay.set_lyrics(lyrics_data, duration_ms)
         if notify and provider:

@@ -151,12 +151,29 @@ def test_translation_toggle_and_line_click_signal(qtbot):
     qtbot.wait(1)
 
     assert window.toggle_translation() is False
-    assert all(not label._translation_label.isVisible() for label in window.line_labels)
+    assert all(not label._translation_visible for label in window.line_labels)
 
     active = window.line_labels[2]
     with qtbot.waitSignal(window.sync_time_changed, timeout=1000) as signal:
         qtbot.mouseClick(active, Qt.MouseButton.LeftButton)
     assert signal.args == [14000]
+
+
+def test_set_translation_enabled_updates_icon_and_lines(qtbot):
+    window = LyricsOverlay()
+    qtbot.addWidget(window)
+    window.set_lyrics(make_lyrics(), 160000)
+
+    window.set_translation_enabled(False)
+
+    assert window.config.translation_enabled is False
+    assert window.title_bar.translation_button._enabled_state is False
+    assert all(not label._translation_label.isVisible() for label in window.line_labels)
+
+    window.set_translation_enabled(True)
+
+    assert window.title_bar.translation_button._enabled_state is True
+    assert all(label._translation_visible for label in window.line_labels)
 
 
 def test_always_on_top_and_geometry_validation(qtbot):

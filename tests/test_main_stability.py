@@ -36,6 +36,9 @@ class OverlayStub:
     def set_searching_lyrics(self):
         pass
 
+    def set_translation_enabled(self, enabled):
+        self.translation_enabled = enabled
+
 
 def test_track_change_cancels_previous_lyrics_fetch(monkeypatch):
     app = LetraCancionApp.__new__(LetraCancionApp)
@@ -76,9 +79,15 @@ def test_new_lyrics_cancel_previous_translation_task(monkeypatch):
     app._translation_cancel_event = cancel_event
     app._translation_enabled = True
     app.translation_service = object()
+    app.settings_manager = SimpleNamespace(
+        settings=SimpleNamespace(translation_enabled=True)
+    )
     app.sync_engine = SimpleNamespace(set_lyrics=lambda lyrics, duration: None)
     app.overlay = OverlayStub()
-    app.tray = SimpleNamespace(show_lyrics_found=lambda provider: None)
+    app.tray = SimpleNamespace(
+        show_lyrics_found=lambda provider: None,
+        set_translation_enabled=lambda enabled: None,
+    )
     app._current_track = TrackInfo(title="Song", artist="Artist")
 
     async def fake_translate(track, lyrics, duration):
@@ -91,7 +100,7 @@ def test_new_lyrics_cancel_previous_translation_task(monkeypatch):
     app._translate_active_lyrics = fake_translate
     monkeypatch.setattr("src.main.asyncio.create_task", fake_create_task)
     lyrics = LyricsData(
-        lines=[LyricLine(1000, "Line")],
+        lines=[LyricLine(1000, "You are the one I want")],
         title="Song",
         artist="Artist",
     )

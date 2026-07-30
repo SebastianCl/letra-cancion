@@ -7,6 +7,7 @@ from src.translation_service import (
     TranslationService,
     _get_translatable_lines,
     _resolve_translation_direction,
+    is_english_lyrics,
 )
 
 
@@ -75,3 +76,21 @@ def test_translation_helpers_apply_the_same_override_and_line_filtering():
     assert _resolve_translation_direction(lyrics, "es") == ("en", "es")
     assert _resolve_translation_direction(lyrics, "en") == ("es", "en")
     assert [idx for idx, _ in _get_translatable_lines(lyrics)] == [0]
+
+
+def test_translation_is_enabled_by_default_only_for_english_lyrics():
+    english = LyricsData(
+        lines=[
+            LyricLine(1000, "You are the one I want"),
+            LyricLine(2000, "Come with me and stay here"),
+        ]
+    )
+    spanish = LyricsData(
+        lines=[
+            LyricLine(1000, "Yo quiero estar contigo"),
+            LyricLine(2000, "Ven y quédate aquí"),
+        ]
+    )
+
+    assert is_english_lyrics(english) is True
+    assert is_english_lyrics(spanish) is False
