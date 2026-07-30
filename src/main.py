@@ -809,6 +809,26 @@ class LetraCancionApp:
             # Persistir preferencia
             self.settings_manager.settings.translation_enabled = enabled
             self.settings_manager.save()
+
+            # Si se activa manualmente después de haber cargado una letra,
+            # iniciar también la traducción que no se solicitó al principio.
+            lyrics = getattr(self.sync_engine, "lyrics", None)
+            translation_task = getattr(self, "_translation_task", None)
+            if (
+                enabled
+                and self._current_track
+                and lyrics
+                and self.translation_service
+                and not (translation_task and not translation_task.done())
+            ):
+                duration_ms = getattr(self.overlay, "_duration_ms", 0)
+                self._replace_task(
+                    "_translation_task",
+                    self._translate_active_lyrics(
+                        self._current_track, lyrics, duration_ms
+                    ),
+                )
+
             logger.info(f"Traducción {'habilitada' if enabled else 'deshabilitada'}")
 
     def _apply_settings(self) -> None:

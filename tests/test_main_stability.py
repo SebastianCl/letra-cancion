@@ -112,6 +112,47 @@ def test_new_lyrics_cancel_previous_translation_task(monkeypatch):
     assert app._translation_task is scheduled
 
 
+def test_enabling_translation_manually_starts_translation_for_active_lyrics(
+    monkeypatch,
+):
+    app = LetraCancionApp.__new__(LetraCancionApp)
+    scheduled = PendingTask()
+    lyrics = LyricsData(
+        lines=[LyricLine(1000, "You are the one I want")],
+        title="Song",
+        artist="Artist",
+    )
+    app._translation_enabled = False
+    app._translation_task = None
+    app._current_track = TrackInfo(title="Song", artist="Artist")
+    app.translation_service = object()
+    app.sync_engine = SimpleNamespace(lyrics=lyrics)
+    app.overlay = SimpleNamespace(
+        toggle_translation=lambda: True,
+        _duration_ms=120000,
+    )
+    app.tray = SimpleNamespace(set_translation_enabled=lambda enabled: None)
+    app.settings_manager = SimpleNamespace(
+        settings=SimpleNamespace(translation_enabled=False),
+        save=lambda: None,
+    )
+
+    async def fake_translate(track, active_lyrics, duration):
+        return None
+
+    def fake_create_task(coroutine):
+        coroutine.close()
+        return scheduled
+
+    app._translate_active_lyrics = fake_translate
+    monkeypatch.setattr("src.main.asyncio.create_task", fake_create_task)
+
+    app._toggle_translation()
+
+    assert app._translation_enabled is True
+    assert app._translation_task is scheduled
+
+
 def test_manager_search_replaces_its_previous_task(monkeypatch):
     app = LetraCancionApp.__new__(LetraCancionApp)
     previous = PendingTask()
