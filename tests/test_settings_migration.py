@@ -56,3 +56,24 @@ def test_v2_settings_persist_window_state(tmp_path):
     assert reloaded.overlay_width == 1200
     assert reloaded.overlay_height == 760
 
+
+def test_invalid_field_keeps_other_valid_v2_settings(tmp_path):
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        json.dumps(
+            {
+                "design_version": CURRENT_DESIGN_VERSION,
+                "opacity": "not-a-number",
+                "translation_enabled": False,
+                "overlay_width": 1200,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    settings = SettingsManager(settings_path).settings
+
+    assert settings.opacity == 1.0
+    assert settings.translation_enabled is False
+    assert settings.overlay_width == 1200
+

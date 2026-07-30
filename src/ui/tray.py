@@ -87,29 +87,29 @@ class TrayIcon(QObject):
         # --- Acciones del menú ---
 
         # Info del track actual
-        self._track_action = QAction("🎵 Sin reproducción")
+        self._track_action = QAction("🎵 Sin reproducción", self._menu)
         self._track_action.setEnabled(False)
         self._menu.addAction(self._track_action)
 
         self._menu.addSeparator()
 
         # Toggle overlay
-        self._toggle_action = QAction("Ocultar ventana")
+        self._toggle_action = QAction("Ocultar ventana", self._menu)
         self._toggle_action.triggered.connect(self._on_toggle_clicked)
         self._menu.addAction(self._toggle_action)
 
-        manage_lyrics_action = QAction("Gestionar letras")
+        manage_lyrics_action = QAction("Gestionar letras", self._menu)
         manage_lyrics_action.triggered.connect(
             lambda: self.manage_lyrics.emit()
         )
         self._menu.addAction(manage_lyrics_action)
 
         # Toggle traducción (H6: hacer visible, antes solo Ctrl+T invisible)
-        self._translation_action = QAction("Traducción: activada")
+        self._translation_action = QAction("Traducción: activada", self._menu)
         self._translation_action.triggered.connect(self._on_translation_toggled)
         self._menu.addAction(self._translation_action)
 
-        self._always_on_top_action = QAction()
+        self._always_on_top_action = QAction(self._menu)
         self._always_on_top_action.triggered.connect(
             lambda: self.toggle_always_on_top.emit()
         )
@@ -119,36 +119,40 @@ class TrayIcon(QObject):
         # Submenú de sincronización (H2: lenguaje natural)
         sync_menu = self._menu.addMenu("Sincronización")
 
-        offset_up_action = QAction("⏩ Letras van adelantadas (+500ms)")
+        offset_up_action = QAction(
+            "⏩ Letras van adelantadas (+500ms)", sync_menu
+        )
         offset_up_action.triggered.connect(lambda: self.offset_increase.emit())
         sync_menu.addAction(offset_up_action)
 
-        offset_down_action = QAction("⏪ Letras van atrasadas (-500ms)")
+        offset_down_action = QAction(
+            "⏪ Letras van atrasadas (-500ms)", sync_menu
+        )
         offset_down_action.triggered.connect(lambda: self.offset_decrease.emit())
         sync_menu.addAction(offset_down_action)
 
         sync_menu.addSeparator()
 
-        reset_action = QAction("🔄 Resetear sincronización")
+        reset_action = QAction("🔄 Resetear sincronización", sync_menu)
         reset_action.triggered.connect(lambda: self.offset_reset.emit())
         sync_menu.addAction(reset_action)
 
         self._menu.addSeparator()
 
         # Configuración (H7)
-        settings_action = QAction("Configuración")
+        settings_action = QAction("Configuración", self._menu)
         settings_action.triggered.connect(self._show_settings)
         self._menu.addAction(settings_action)
 
         # Ayuda (H10)
-        help_action = QAction("Ayuda")
+        help_action = QAction("Ayuda", self._menu)
         help_action.triggered.connect(self._show_help)
         self._menu.addAction(help_action)
 
         self._menu.addSeparator()
 
         # Salir
-        quit_action = QAction("Salir de Letra Canción")
+        quit_action = QAction("Salir de Letra Canción", self._menu)
         quit_action.triggered.connect(lambda: self.quit_app.emit())
         self._menu.addAction(quit_action)
 

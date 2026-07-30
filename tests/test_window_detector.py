@@ -124,3 +124,15 @@ def test_qobuz_state_does_not_repeat_same_seek(tmp_path):
 
     assert len(seeks) == 1
     assert abs(seeks[0] - 45000) < 100
+
+
+def test_qobuz_state_ignores_timestamp_outside_datetime_range(tmp_path):
+    state_path = tmp_path / "player-0.json"
+    _write_position(state_path, 1000, 2**63 - 1)
+
+    with patch("src.window_detector.ctypes.windll"):
+        detector = WindowTitleDetector(qobuz_state_path=state_path)
+
+    detector._update_position_from_qobuz_state()
+
+    assert detector._last_qobuz_timestamp_ms is None

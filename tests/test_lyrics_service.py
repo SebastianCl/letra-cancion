@@ -3,10 +3,12 @@ from unittest.mock import sentinel
 
 from src.lyrics_service import (
     LRCLIBProvider,
+    LyricsCache,
     NetEaseProvider,
     _metadata_matches,
     _track_matches,
 )
+from src.lrc_parser import LRCParser
 
 
 class FakeResponse:
@@ -182,6 +184,22 @@ class LyricsProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(candidates[0].is_synced)
         self.assertEqual(session.get_calls, [])
 
+    async def test_candidate_search_ignores_incomplete_api_payloads(self):
+        lrclib = LRCLIBProvider(
+            FakeSession(get_response=FakeResponse({"unexpected": "object"})),
+            ssl_context=sentinel.ssl_context,
+        )
+        netease = NetEaseProvider(
+            FakeSession(post_response=FakeResponse(["unexpected", "list"]))
+        )
+
+        self.assertEqual(
+            await lrclib.search_candidates("Radiohead", "Creep"), []
+        )
+        self.assertEqual(
+            await netease.search_candidates("Radiohead", "Creep"), []
+        )
+
 
 class MetadataMatchingTests(unittest.TestCase):
     def test_track_matches_normalized_metadata(self):
@@ -197,6 +215,24 @@ class MetadataMatchingTests(unittest.TestCase):
     def test_metadata_rejects_missing_values(self):
         self.assertFalse(_metadata_matches("Creep", None))
         self.assertFalse(_metadata_matches("", "Creep"))
+
+
+class LyricsCacheTests(unittest.TestCase):
+    def test_plain_lyrics_remain_unsynced_after_cache_round_trip(self):
+        from tempfile import TemporaryDirectory
+        from pathlib import Path
+
+        with TemporaryDirectory() as directory:
+            cache = LyricsCache(Path(directory))
+            lyrics = LRCParser.parse_plain_lyrics(
+                "First line\nSecond line", duration_ms=20000
+            )
+
+            cache.save("Artist", "Song", lyrics)
+            restored = cache.get("Artist", "Song")
+
+        self.assertIsNotNone(restored)
+        self.assertFalse(restored.is_synced)
 
 
 if __name__ == "__main__":

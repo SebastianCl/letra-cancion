@@ -139,9 +139,9 @@ class SyncEngine:
                 f"Modo de sincronización: ESTIMATED ({self._estimated_line_duration_ms}ms/línea)"
             )
 
-        # Aplicar offset almacenado en las letras
-        if lyrics.offset_ms != 0:
-            self._offset_ms = lyrics.offset_ms
+        # Cada letra define el offset de su propia canción, incluido el valor
+        # cero que elimina cualquier ajuste heredado de la pista anterior.
+        self._offset_ms = lyrics.offset_ms
 
         # Notificar que se cargaron letras
         for callback in self._on_lyrics_loaded:

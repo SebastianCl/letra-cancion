@@ -94,12 +94,40 @@ class SettingsManager:
 
         try:
             data = json.loads(self._path.read_text(encoding="utf-8"))
-            if int(data.get("design_version", 1)) < CURRENT_DESIGN_VERSION:
+            if not isinstance(data, dict):
+                raise ValueError("La configuración debe ser un objeto JSON")
+            try:
+                design_version = int(data.get("design_version", 1))
+            except (TypeError, ValueError):
+                design_version = 1
+            if design_version < CURRENT_DESIGN_VERSION:
                 data = self._migrate_legacy_settings(data)
             # Aplicar solo los campos conocidos
+            defaults = AppSettings()
             for key, value in data.items():
-                if hasattr(self._settings, key):
+                if not hasattr(defaults, key):
+                    continue
+                default_value = getattr(defaults, key)
+                if isinstance(default_value, bool):
+                    valid = isinstance(value, bool)
+                elif isinstance(default_value, int):
+                    valid = isinstance(value, int) and not isinstance(value, bool)
+                elif isinstance(default_value, float):
+                    valid = (
+                        isinstance(value, (int, float))
+                        and not isinstance(value, bool)
+                    )
+                    if valid:
+                        value = float(value)
+                else:
+                    valid = isinstance(value, type(default_value))
+                if valid:
                     setattr(self._settings, key, value)
+                else:
+                    logger.warning(
+                        "Valor inválido para %s; se conserva el valor por defecto",
+                        key,
+                    )
             self._settings.validate()
             logger.info(f"Configuración cargada desde {self._path}")
         except Exception as e:

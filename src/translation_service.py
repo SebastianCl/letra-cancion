@@ -63,10 +63,22 @@ class TranslationCache:
             try:
                 content = cache_path.read_text(encoding="utf-8")
                 data = json.loads(content)
+                if not isinstance(data, dict):
+                    return None
+                raw_translations = data.get("translations")
+                if not isinstance(raw_translations, dict):
+                    return None
                 # Convertir keys de string a int
-                translations = {
-                    int(k): v for k, v in data.get("translations", {}).items()
-                }
+                translations: dict[int, str] = {}
+                for key, value in raw_translations.items():
+                    timestamp_ms = int(key)
+                    if (
+                        timestamp_ms < 0
+                        or not isinstance(value, str)
+                        or not value.strip()
+                    ):
+                        return None
+                    translations[timestamp_ms] = value
                 logger.debug(f"Translation cache hit: {artist} - {title}")
                 return translations
             except Exception as e:
@@ -531,16 +543,16 @@ class TranslationService:
             try:
                 translations = translator.translate_batch(texts)
                 if not translations:
-                    translations = texts  # fallback: texto original
+                    translations = []
             except Exception as e:
                 logger.warning(f"Error en chunk translate, fallback uno-por-uno: {e}")
-                translations = []
+                translations: list[Optional[str]] = []
                 for text in texts:
                     try:
                         result = translator.translate(text)
-                        translations.append(result if result else text)
+                        translations.append(result or None)
                     except Exception:
-                        translations.append(text)
+                        translations.append(None)
 
             # Emitir resultados del chunk
             for i, (idx, line) in enumerate(chunk):
@@ -552,9 +564,17 @@ class TranslationService:
                     translation_dict[line.timestamp_ms] = tr
                     callback(idx, line.timestamp_ms, tr)
 
-        # --- 4. Traducción completa → guardar en caché de disco y limpiar parcial ---
-        self.cache.save(artist, title, translation_dict, detected_target)
-        self._partial_cache.pop(partial_key, None)
+        # --- 4. Solo persistir resultados completos; los parciales se reintentan. ---
+        if len(translation_dict) == len(lines_to_translate):
+            self.cache.save(artist, title, translation_dict, detected_target)
+            self._partial_cache.pop(partial_key, None)
+        else:
+            self._partial_cache[partial_key] = translation_dict
+            logger.warning(
+                "Traducción progresiva incompleta: %s/%s líneas",
+                len(translation_dict),
+                len(lines_to_translate),
+            )
         logger.info(
             f"Traducción progresiva completada: {len(translation_dict)} líneas "
             f"para: {artist} - {title}"
@@ -566,7 +586,7 @@ class TranslationService:
         texts: list[str],
         source_lang: str = "en",
         target_lang: str = "es",
-    ) -> list[str]:
+    ) -> list[Optional[str]]:
         """
         Traduce múltiples textos en batch.
 
@@ -595,9 +615,9 @@ class TranslationService:
             for text in texts:
                 try:
                     result = translator.translate(text)
-                    results.append(result if result else text)
+                    results.append(result or None)
                 except Exception:
-                    results.append(text)  # Mantener original si falla
+                    results.append(None)
             return results
 
     def _apply_translations(

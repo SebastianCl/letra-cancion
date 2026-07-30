@@ -169,10 +169,14 @@ class LRCParser:
             for match in cls.TIMESTAMP_PATTERN.finditer(line):
                 minutes = int(match.group(1))
                 seconds = int(match.group(2))
+                if seconds >= 60:
+                    continue
 
                 # Milisegundos (puede ser .xx o .xxx)
                 ms_str = match.group(3) or "0"
-                if len(ms_str) == 2:
+                if len(ms_str) == 1:
+                    milliseconds = int(ms_str) * 100
+                elif len(ms_str) == 2:
                     milliseconds = int(ms_str) * 10
                 else:
                     milliseconds = int(ms_str)

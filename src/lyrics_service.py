@@ -130,6 +130,7 @@ class LyricsCache:
             try:
                 content = plain_path.read_text(encoding="utf-8")
                 data = LRCParser.parse(content)
+                data.is_synced = False
                 logger.debug(f"Cache hit (plain): {artist} - {title}")
                 return data
             except Exception as e:
@@ -305,12 +306,21 @@ class LRCLIBProvider:
             logger.warning("LRCLIB candidate search exception: %s", exc)
             return []
 
+        if not isinstance(results, list):
+            logger.warning("LRCLIB candidate search returned an invalid payload")
+            return []
+
         candidates: list[LyricsCandidate] = []
-        for result in (results or [])[:limit]:
+        for result in results[:limit]:
+            if not isinstance(result, dict):
+                continue
             lyrics_data = self._parse_response(result)
             if lyrics_data is None:
                 continue
-            duration_ms = int(float(result.get("duration") or 0) * 1000)
+            try:
+                duration_ms = int(float(result.get("duration") or 0) * 1000)
+            except (TypeError, ValueError, OverflowError):
+                duration_ms = 0
             candidates.append(
                 LyricsCandidate(
                     provider="LRCLIB",
@@ -338,6 +348,8 @@ class LRCLIBProvider:
 
     def _parse_response(self, data: dict) -> Optional[LyricsData]:
         """Parsea la respuesta de LRCLIB a LyricsData."""
+        if not isinstance(data, dict):
+            return None
         synced_lyrics = data.get("syncedLyrics")
         plain_lyrics = data.get("plainLyrics")
 
@@ -350,7 +362,10 @@ class LRCLIBProvider:
             return lyrics_data
         elif plain_lyrics:
             # Fallback a letras planas
-            duration_ms = int(data.get("duration", 0) * 1000)
+            try:
+                duration_ms = int(float(data.get("duration") or 0) * 1000)
+            except (TypeError, ValueError, OverflowError):
+                duration_ms = 0
             lyrics_data = LRCParser.parse_plain_lyrics(plain_lyrics, duration_ms)
             lyrics_data.title = data.get("trackName")
             lyrics_data.artist = data.get("artistName")
@@ -432,14 +447,35 @@ class NetEaseProvider:
             logger.warning("NetEase candidate search error: %s", exc)
             return []
 
+        if not isinstance(result, dict):
+            logger.warning("NetEase candidate search returned an invalid payload")
+            return []
+        result_data = result.get("result")
+        if not isinstance(result_data, dict):
+            return []
+        songs = result_data.get("songs")
+        if not isinstance(songs, list):
+            return []
+
         candidates: list[LyricsCandidate] = []
-        for song in result.get("result", {}).get("songs", [])[:limit]:
+        for song in songs[:limit]:
+            if not isinstance(song, dict):
+                continue
+            raw_artists = song.get("artists")
+            if not isinstance(raw_artists, list):
+                raw_artists = []
             artists = [
                 str(item.get("name") or "")
-                for item in song.get("artists", [])
-                if item.get("name")
+                for item in raw_artists
+                if isinstance(item, dict) and item.get("name")
             ]
             album = song.get("album") or {}
+            if not isinstance(album, dict):
+                album = {}
+            try:
+                duration_ms = max(0, int(song.get("duration") or 0))
+            except (TypeError, ValueError, OverflowError):
+                duration_ms = 0
             candidates.append(
                 LyricsCandidate(
                     provider="NetEase",
@@ -447,7 +483,7 @@ class NetEaseProvider:
                     artist=", ".join(artists),
                     title=str(song.get("name") or ""),
                     album=str(album.get("name") or ""),
-                    duration_ms=max(0, int(song.get("duration") or 0)),
+                    duration_ms=duration_ms,
                     is_synced=None,
                 )
             )

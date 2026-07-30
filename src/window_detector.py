@@ -295,6 +295,10 @@ class WindowTitleDetector:
             timestamp_ms = int(position["timestamp"])
             if value_ms < 0 or timestamp_ms <= 0:
                 return None
+            try:
+                datetime.fromtimestamp(timestamp_ms / 1000)
+            except (OSError, OverflowError, ValueError):
+                return None
             return value_ms, timestamp_ms
         except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
             # Qobuz puede estar escribiendo el JSON justo durante este poll.

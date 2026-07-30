@@ -57,3 +57,17 @@ def test_seek_immediately_selects_exact_lyric_line_when_moving_back():
     assert updates[-1].current_line_index == 1
     assert updates[-1].current_line.text == "Second line"
 
+
+def test_new_lyrics_reset_offset_when_track_has_no_saved_adjustment():
+    detector = FakeDetector()
+    engine = SyncEngine(detector)
+    adjusted = LRCParser.parse("[offset:1500]\n[00:01.00]Adjusted")
+    default = LRCParser.parse("[00:01.00]Default")
+
+    engine.set_lyrics(adjusted)
+    assert engine.offset_ms == 1500
+
+    engine.set_lyrics(default)
+
+    assert engine.offset_ms == 0
+

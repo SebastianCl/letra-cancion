@@ -1196,8 +1196,8 @@ class LyricsOverlay(QWidget):
         self.title_bar.set_track(title, artist)
 
     def _on_close_clicked(self) -> None:
-        """Solicita el cierre completo de la aplicación."""
-        self.quit_requested.emit()
+        """Oculta la ventana y mantiene la aplicación en la bandeja."""
+        self.close()
 
     def _on_maximize_clicked(self) -> None:
         if self.isMaximized():

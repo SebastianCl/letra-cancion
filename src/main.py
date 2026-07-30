@@ -83,8 +83,11 @@ class LetraCancionApp:
             self.settings_manager.settings.translation_enabled
         )
         self._translation_cancel_event: Optional[threading.Event] = None
+        self._lyrics_fetch_task: Optional[asyncio.Task] = None
+        self._translation_task: Optional[asyncio.Task] = None
         self._manager_search_task: Optional[asyncio.Task] = None
         self._manager_preview_task: Optional[asyncio.Task] = None
+        self._detector_task: Optional[asyncio.Task] = None
 
         # Qt App
         self.app: Optional[QApplication] = None
@@ -268,8 +271,14 @@ class LetraCancionApp:
         if self._translation_cancel_event is not None:
             self._translation_cancel_event.set()
             self._translation_cancel_event = None
+        translation_task = getattr(self, "_translation_task", None)
+        if translation_task and not translation_task.done():
+            translation_task.cancel()
 
         if track is None:
+            fetch_task = getattr(self, "_lyrics_fetch_task", None)
+            if fetch_task and not fetch_task.done():
+                fetch_task.cancel()
             logger.info("No hay canción reproduciéndose")
             self.sync_engine.clear_lyrics()
             self.overlay.set_lyrics(None)
@@ -288,8 +297,14 @@ class LetraCancionApp:
         self.overlay.set_track_info(track.artist, track.title)
         self.overlay.set_searching_lyrics()
 
-        # Buscar letras en un task separado
-        asyncio.create_task(self._fetch_lyrics(track))
+        self._schedule_lyrics_fetch(track)
+
+    def _schedule_lyrics_fetch(self, track: TrackInfo) -> None:
+        """Inicia una búsqueda y cancela la que pertenecía a la pista anterior."""
+        fetch_task = getattr(self, "_lyrics_fetch_task", None)
+        if fetch_task and not fetch_task.done():
+            fetch_task.cancel()
+        self._lyrics_fetch_task = asyncio.create_task(self._fetch_lyrics(track))
 
     async def _fetch_lyrics(self, track: TrackInfo) -> None:
         """Busca letras para un track y muestra la letra original inmediatamente, traduciendo en segundo plano."""
@@ -346,6 +361,9 @@ class LetraCancionApp:
         if self._translation_cancel_event is not None:
             self._translation_cancel_event.set()
             self._translation_cancel_event = None
+        translation_task = getattr(self, "_translation_task", None)
+        if translation_task and not translation_task.done():
+            translation_task.cancel()
 
         lyrics_data.artist = track.artist
         lyrics_data.title = track.title
@@ -357,7 +375,7 @@ class LetraCancionApp:
             self.tray.show_lyrics_found(provider)
 
         if self._translation_enabled and self.translation_service:
-            asyncio.create_task(
+            self._translation_task = asyncio.create_task(
                 self._translate_active_lyrics(track, lyrics_data, duration_ms)
             )
 
@@ -375,11 +393,19 @@ class LetraCancionApp:
             def on_line_translated(
                 line_index: int, timestamp_ms: int, translation: str
             ) -> None:
-                loop.call_soon_threadsafe(
-                    self.overlay.update_line_translation,
-                    line_index,
-                    translation,
-                )
+                def apply_translation() -> None:
+                    if (
+                        cancel_event.is_set()
+                        or self._current_track is None
+                        or not self._current_track.matches(track)
+                        or self.overlay is None
+                    ):
+                        return
+                    self.overlay.update_line_translation(
+                        line_index, translation
+                    )
+
+                loop.call_soon_threadsafe(apply_translation)
 
             await asyncio.to_thread(
                 self.translation_service.translate_lyrics_progressive,
@@ -642,7 +668,7 @@ class LetraCancionApp:
                 self._translation_cancel_event.set()
             self.sync_engine.clear_lyrics()
             self.overlay.set_searching_lyrics("proveedores")
-            asyncio.create_task(self._fetch_lyrics(self._current_track))
+            self._schedule_lyrics_fetch(self._current_track)
 
     def _on_playback_changed(self, playback: PlaybackInfo) -> None:
         """Callback cuando cambia el estado de reproducción."""
@@ -796,12 +822,7 @@ class LetraCancionApp:
 
         # Detener componentes primero
         try:
-            for task in (
-                self._manager_search_task,
-                self._manager_preview_task,
-            ):
-                if task and not task.done():
-                    task.cancel()
+            self._cancel_pending_tasks()
             if self.sync_engine:
                 self.sync_engine.stop()
             if self.hotkey_manager:
@@ -819,6 +840,24 @@ class LetraCancionApp:
         # Salir del loop de Qt
         if self.app:
             QTimer.singleShot(100, self.app.quit)
+
+    def _cancel_pending_tasks(self) -> list[asyncio.Task]:
+        """Solicita cancelación de todas las tareas propias aún activas."""
+        if self._translation_cancel_event is not None:
+            self._translation_cancel_event.set()
+        cancelled: list[asyncio.Task] = []
+        for attribute in (
+            "_lyrics_fetch_task",
+            "_translation_task",
+            "_manager_search_task",
+            "_manager_preview_task",
+            "_detector_task",
+        ):
+            task = getattr(self, attribute, None)
+            if task and not task.done():
+                task.cancel()
+                cancelled.append(task)
+        return cancelled
 
     async def run(self) -> None:
         """
@@ -877,7 +916,9 @@ class LetraCancionApp:
             self._on_track_changed(self.detector.current_track)
 
         # Iniciar polling del detector de ventanas
-        detector_task = asyncio.create_task(self.detector.start_polling())
+        self._detector_task = asyncio.create_task(
+            self.detector.start_polling()
+        )
 
         # Iniciar motor de sincronización (usa QTimer internamente, no async)
         self.sync_engine.start()
@@ -888,6 +929,9 @@ class LetraCancionApp:
                 await asyncio.sleep(0.1)
         finally:
             # Limpiar
+            pending_tasks = self._cancel_pending_tasks()
+            if pending_tasks:
+                await asyncio.gather(*pending_tasks, return_exceptions=True)
             self.sync_engine.stop()
             self.hotkey_manager.stop()
 
@@ -901,6 +945,9 @@ class LetraCancionApp:
 
     async def cleanup(self) -> None:
         """Limpia recursos."""
+        pending_tasks = self._cancel_pending_tasks()
+        if pending_tasks:
+            await asyncio.gather(*pending_tasks, return_exceptions=True)
         if self.sync_engine:
             self.sync_engine.stop()
 
