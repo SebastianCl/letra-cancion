@@ -322,6 +322,7 @@ class LyricsManagerDialog(QDialog):
         layout.setContentsMargins(10, 14, 10, 10)
 
         metadata_group = QGroupBox("Canción")
+        self.editor_metadata_group = metadata_group
         metadata_form = QFormLayout(metadata_group)
         self.editor_artist_edit = QLineEdit()
         self.editor_artist_edit.setAccessibleName("Artista de la letra")
@@ -339,15 +340,13 @@ class LyricsManagerDialog(QDialog):
         metadata_form.addRow("Título:", self.editor_title_edit)
         metadata_form.addRow("Álbum:", self.editor_album_edit)
         metadata_form.addRow("Duración:", self.editor_duration_spin)
-        layout.addWidget(metadata_group)
-
         import_group = QGroupBox("Pegar o importar")
+        self.editor_import_group = import_group
         import_layout = QVBoxLayout(import_group)
         self.raw_lyrics_edit = QPlainTextEdit()
         self.raw_lyrics_edit.setAccessibleName(
             "Texto de letra para procesar"
         )
-        self.raw_lyrics_edit.setMaximumHeight(120)
         self.raw_lyrics_edit.setPlaceholderText(
             "Pega texto plano o contenido LRC. Después pulsa “Procesar texto”."
         )
@@ -361,7 +360,6 @@ class LyricsManagerDialog(QDialog):
         import_actions.addWidget(self.distribute_button)
         import_actions.addStretch()
         import_layout.addLayout(import_actions)
-        layout.addWidget(import_group)
 
         self.lines_table = QTableWidget(0, 2)
         self.lines_table.setAccessibleName("Líneas de la letra")
@@ -379,8 +377,6 @@ class LyricsManagerDialog(QDialog):
         self.lines_table.setSelectionBehavior(
             QTableWidget.SelectionBehavior.SelectRows
         )
-        layout.addWidget(self.lines_table, 1)
-
         row_actions = QHBoxLayout()
         self.add_row_button = QPushButton("Añadir línea")
         self.remove_row_button = QPushButton("Eliminar línea")
@@ -396,7 +392,6 @@ class LyricsManagerDialog(QDialog):
         ):
             row_actions.addWidget(button)
         row_actions.addStretch()
-        layout.addLayout(row_actions)
 
         footer = QHBoxLayout()
         self.synced_check = QCheckBox("Letra sincronizada")
@@ -410,7 +405,28 @@ class LyricsManagerDialog(QDialog):
         footer.addWidget(self.synced_check)
         footer.addWidget(self.editor_status_label, 1)
         footer.addWidget(self.save_editor_button)
-        layout.addLayout(footer)
+
+        time_section = QWidget()
+        self.editor_time_section = time_section
+        time_layout = QVBoxLayout(time_section)
+        time_layout.setContentsMargins(0, 0, 0, 0)
+        time_layout.addWidget(self.lines_table, 1)
+        time_layout.addLayout(row_actions)
+        time_layout.addLayout(footer)
+
+        self.editor_sections_splitter = QSplitter(Qt.Orientation.Vertical)
+        self.editor_sections_splitter.setAccessibleName(
+            "Secciones redimensionables del editor"
+        )
+        self.editor_sections_splitter.setChildrenCollapsible(True)
+        self.editor_sections_splitter.addWidget(metadata_group)
+        self.editor_sections_splitter.addWidget(import_group)
+        self.editor_sections_splitter.addWidget(time_section)
+        self.editor_sections_splitter.setStretchFactor(0, 1)
+        self.editor_sections_splitter.setStretchFactor(1, 1)
+        self.editor_sections_splitter.setStretchFactor(2, 2)
+        self.editor_sections_splitter.setSizes([150, 180, 400])
+        layout.addWidget(self.editor_sections_splitter, 1)
         self.tabs.addTab(tab, "Agregar / editar")
 
         self.process_text_button.clicked.connect(self._process_raw_text)

@@ -65,6 +65,39 @@ def test_search_preview_and_apply_are_gated_by_current_track(qtbot):
     assert signal.args[0] is match
 
 
+def test_editor_sections_can_be_resized_vertically(qtbot):
+    dialog = LyricsManagerDialog()
+    qtbot.addWidget(dialog)
+    dialog.show()
+    dialog.tabs.setCurrentIndex(1)
+    splitter = dialog.editor_sections_splitter
+
+    qtbot.waitUntil(lambda: splitter.height() > 0)
+
+    assert splitter.orientation() == Qt.Orientation.Vertical
+    assert splitter.count() == 3
+    assert splitter.widget(0) is dialog.editor_metadata_group
+    assert splitter.widget(1) is dialog.editor_import_group
+    assert splitter.widget(2) is dialog.editor_time_section
+    assert all(splitter.isCollapsible(index) for index in range(3))
+    assert dialog.editor_time_section.isAncestorOf(dialog.lines_table)
+    assert dialog.editor_time_section.isAncestorOf(dialog.add_row_button)
+    assert dialog.editor_time_section.isAncestorOf(dialog.save_editor_button)
+
+    before = splitter.sizes()
+    splitter.setSizes([before[0], before[1] + 30, max(1, before[2] - 30)])
+    after = splitter.sizes()
+
+    assert after[1] > before[1]
+    assert after[2] < before[2]
+
+    splitter.setSizes([0, after[1], after[2]])
+    assert splitter.sizes()[0] == 0
+
+    splitter.setSizes(before)
+    assert splitter.sizes()[0] > 0
+
+
 def test_process_plain_text_and_capture_advances_row(qtbot):
     dialog = LyricsManagerDialog()
     qtbot.addWidget(dialog)
