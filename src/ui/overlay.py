@@ -835,7 +835,7 @@ class WindowTitleBar(QFrame):
         controls_layout = QHBoxLayout(controls)
         controls_layout.setContentsMargins(64, 0, 0, 0)
         controls_layout.setSpacing(8)
-        self.manage_button = self._make_button("♫", "Gestionar letras")
+        self.manage_button = self._make_button("📃", "Gestionar letras")
         self.translation_button = TranslationButton()
         self.translation_button.setToolTip("Mostrar/ocultar traducción")
         self.translation_button.setAccessibleName("Mostrar/ocultar traducción")
